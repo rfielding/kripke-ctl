@@ -1,0 +1,21 @@
+# Binaries
+kripke-ctl
+kripke-ctl.exe
+
+# Test binaries
+*.test
+
+# Output files
+*.dot
+*.png
+*.svg
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
