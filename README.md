@@ -19,4 +19,12 @@ git clone ...
 cd kripke-ctl
 go mod tidy
 go run ./cmd/demo
+```
+
+
+<!-- REFACTOR_REQUEST:
+- Tighten the definition of “admissible implication”.
+- Add a short “Why CTL, not LTL” section.
+- Add a concrete example with AG(p -> AF(q)).
+-->
 
