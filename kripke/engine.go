@@ -4,7 +4,13 @@ import (
 	"fmt"
 	"math/rand"
 	"sync"
+	"time"
 )
+
+func init() {
+	// Seed the random number generator for probabilistic transitions
+	rand.Seed(time.Now().UnixNano())
+}
 
 // State represents a state in the MDP
 type State interface {
@@ -167,15 +173,13 @@ func (a *Actor) ExecuteTransition(action string) (State, float64, error) {
 		// Probabilistic selection
 		r := rand.Float64()
 		cumulative := 0.0
+		chosen = possible[0] // Default to first transition
 		for _, t := range possible {
 			cumulative += t.Probability
 			if r <= cumulative {
 				chosen = t
 				break
 			}
-		}
-		if chosen.FromState == nil {
-			chosen = possible[len(possible)-1] // Fallback
 		}
 	}
 
@@ -304,7 +308,13 @@ func (m *Model) GetMetrics() map[string]interface{} {
 	metrics := make(map[string]interface{})
 	metrics["total_actors"] = len(m.Actors)
 	metrics["total_states"] = len(m.States)
-	metrics["total_reward"] = m.GetTotalReward()
+	
+	// Calculate total reward without re-acquiring lock
+	total := 0.0
+	for _, actor := range m.Actors {
+		total += actor.GetReward()
+	}
+	metrics["total_reward"] = total
 
 	actorStates := make(map[string]string)
 	actorRewards := make(map[string]float64)
