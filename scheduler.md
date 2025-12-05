@@ -25,12 +25,17 @@ stateDiagram-v2
     [*] --> Init
 
     state "Init\n(init: x = 0)" as Init
-    state "NeedsAttention\n(needsAttention: x > 0)" as NeedsAttention
-    state "IsFull\n(isFull: x >= cap)" as IsFull
 
-    Init --> NeedsAttention: B.c[0].x' = 1 + B.c[0].x
-    NeedsAttention --> NeedsAttention: internal tick\n(x' = x + 1 or x' = x - 1)
-    NeedsAttention --> IsFull: B.c[0].x' = 1 + B.c[0].x\n(x >= cap)
-    IsFull --> NeedsAttention: B.c[0] ? msg\n(x' = x - 1)
+    state NeedsAttention {
+        [*] --> NotFull
 
+        state "NotFull\n(needsAttention: x > 0 ∧ x < cap)" as NotFull
+        state "IsFull\n(isFull: x >= cap)" as IsFull
+
+        NotFull --> IsFull: enqueue\nx' = x + 1
+        IsFull --> NotFull: dequeue\nx' = x - 1
+    }
+
+    Init --> NeedsAttention: first enqueue\nx' = x + 1
+    NeedsAttention --> Init: drain to zero\nx' = 0
 ```
