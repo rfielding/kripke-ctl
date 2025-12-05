@@ -139,12 +139,12 @@ func (ch *Channel) TryRecv() (Message, bool) {
 
 // World contains all actors, channels, global time, RNG, and event log.
 type World struct {
-	Time       int
-	Procs      []Process
-	Channels   map[string]*Channel // key = Address.String()
-	Events     []Event
-	rng        *rand.Rand
-	nextMsgID  uint64
+	Time      int
+	Procs     []Process
+	Channels  map[string]*Channel // key = Address.String()
+	Events    []Event
+	rng       *rand.Rand
+	nextMsgID uint64
 }
 
 // NewWorld constructs a world with the given processes and channels.

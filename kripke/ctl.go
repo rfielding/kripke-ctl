@@ -1,253 +1,425 @@
 package kripke
 
-// CTL evaluator over a finite Kripke graph.
-// Independent from World/Process; you just map your states to StateID
-// and build Graph.Succ accordingly.
+// ---------- Core Kripke Graph Types ----------
 
-type StateID string
+type StateID int
 
-// Graph is a finite Kripke structure: states + successor relation.
-type Graph struct {
-	States []StateID
-	Succ   map[StateID][]StateID // R(s) = Succ[s]
-}
-
-// ----- State sets -----
-
+// StateSet is a set of states.
 type StateSet map[StateID]struct{}
 
-func NewStateSet() StateSet                                { return make(StateSet) }
-func (s StateSet) Has(id StateID) bool                     { _, ok := s[id]; return ok }
-func (s StateSet) Add(id StateID)                          { s[id] = struct{}{} }
-func (s StateSet) Copy() StateSet                          { out := NewStateSet(); for k := range s { out[k] = struct{}{} }; return out }
-func (s StateSet) Size() int                               { return len(s) }
-func (s StateSet) ToSlice() []StateID                      { out := make([]StateID, 0, len(s)); for k := range s { out = append(out, k) }; return out }
-func (s StateSet) Equals(other StateSet) bool              { if len(s) != len(other) { return false }; for k := range s { if !other.Has(k) { return false } }; return true }
-func (s StateSet) Intersect(other StateSet) StateSet       { out := NewStateSet(); for k := range s { if other.Has(k) { out.Add(k) } }; return out }
-func (s StateSet) Union(other StateSet) StateSet           { out := s.Copy(); for k := range other { out.Add(k) }; return out }
-func (s StateSet) Difference(other StateSet) StateSet      { out := NewStateSet(); for k := range s { if !other.Has(k) { out.Add(k) } }; return out }
+func NewStateSet() StateSet { return make(StateSet) }
 
-// Universe builds a set containing all states in the graph.
-func Universe(g *Graph) StateSet {
-	u := NewStateSet()
-	for _, s := range g.States {
-		u.Add(s)
-	}
-	return u
+func (s StateSet) Add(id StateID) {
+	s[id] = struct{}{}
 }
 
-// Pre_E returns predecessors with SOME successor in W:
-// Pre_E(W) = { s | ∃ s' . R(s,s') ∧ s' ∈ W }
-func Pre_E(W StateSet, g *Graph) StateSet {
-	out := NewStateSet()
-	for s, succs := range g.Succ {
-		for _, s2 := range succs {
-			if W.Has(s2) {
-				out.Add(s)
-				break
-			}
-		}
+func (s StateSet) Contains(id StateID) bool {
+	_, ok := s[id]
+	return ok
+}
+
+func (s StateSet) Clone() StateSet {
+	out := make(StateSet, len(s))
+	for k := range s {
+		out[k] = struct{}{}
 	}
 	return out
 }
 
-// Pre_A returns predecessors whose ALL successors are in W.
-// Pre_A(W) = { s | Succ(s) ⊆ W } (vacuously true if Succ(s) is empty).
-func Pre_A(W StateSet, g *Graph) StateSet {
-	out := NewStateSet()
-	for s, succs := range g.Succ {
-		if len(succs) == 0 {
-			// Convention: dead-ends satisfy AX φ for all φ (or treat differently if desired).
-			out.Add(s)
-			continue
+func (s StateSet) Equal(other StateSet) bool {
+	if len(s) != len(other) {
+		return false
+	}
+	for k := range s {
+		if _, ok := other[k]; !ok {
+			return false
 		}
-		all := true
-		for _, s2 := range succs {
-			if !W.Has(s2) {
-				all = false
-				break
-			}
-		}
-		if all {
-			out.Add(s)
-		}
+	}
+	return true
+}
+
+// Graph is a finite Kripke structure: states, initial states,
+// successor edges, and atomic proposition labels.
+type Graph struct {
+	nextID   int
+	nameToID map[string]StateID
+	idToName map[StateID]string
+	labels   map[StateID]map[string]bool
+	succ     map[StateID][]StateID
+	init     []StateID
+}
+
+// NewGraph constructs an empty Graph.
+func NewGraph() *Graph {
+	return &Graph{
+		nextID:   0,
+		nameToID: make(map[string]StateID),
+		idToName: make(map[StateID]string),
+		labels:   make(map[StateID]map[string]bool),
+		succ:     make(map[StateID][]StateID),
+		init:     make([]StateID, 0),
+	}
+}
+
+// AddState adds a state with the given name and AP labels.
+// Returns its StateID.
+func (g *Graph) AddState(name string, lbls map[string]bool) StateID {
+	if _, exists := g.nameToID[name]; exists {
+		panic("AddState: duplicate state name " + name)
+	}
+	id := StateID(g.nextID)
+	g.nextID++
+	g.nameToID[name] = id
+	g.idToName[id] = name
+
+	if lbls == nil {
+		lbls = make(map[string]bool)
+	}
+	g.labels[id] = lbls
+	return id
+}
+
+func (g *Graph) ensureState(name string) StateID {
+	if id, ok := g.nameToID[name]; ok {
+		return id
+	}
+	return g.AddState(name, nil)
+}
+
+// AddEdge adds a transition from 'fromName' to 'toName'.
+// States are auto-created if not already present.
+func (g *Graph) AddEdge(fromName, toName string) {
+	from := g.ensureState(fromName)
+	to := g.ensureState(toName)
+	g.succ[from] = append(g.succ[from], to)
+}
+
+// SetInitial marks a named state as initial.
+func (g *Graph) SetInitial(name string) {
+	id := g.ensureState(name)
+	g.init = append(g.init, id)
+}
+
+// InitialStates returns the initial state IDs.
+func (g *Graph) InitialStates() []StateID {
+	out := make([]StateID, len(g.init))
+	copy(out, g.init)
+	return out
+}
+
+// States returns all defined states.
+func (g *Graph) States() []StateID {
+	out := make([]StateID, 0, len(g.idToName))
+	for id := range g.idToName {
+		out = append(out, id)
 	}
 	return out
 }
 
-// ----- CTL Formula AST -----
+// Succ returns the successors of a state.
+func (g *Graph) Succ(s StateID) []StateID {
+	return g.succ[s]
+}
 
-// Formula is a CTL state formula.
-// Sat(g) returns the set of states satisfying the formula in graph g.
+// HasLabel checks if state s has atomic proposition 'prop'.
+func (g *Graph) HasLabel(s StateID, prop string) bool {
+	lbls := g.labels[s]
+	return lbls[prop]
+}
+
+// NameOf returns the human-readable name of a state.
+func (g *Graph) NameOf(s StateID) string {
+	return g.idToName[s]
+}
+
+// ---------- CTL formulas ----------
+
 type Formula interface {
 	Sat(g *Graph) StateSet
 }
 
-// Atom: an atomic proposition is represented as a set of states
-// where it holds. You map your own predicates to this set.
-type Atom struct {
-	States StateSet
+// ----- atomic proposition -----
+
+type AtomFormula struct {
+	Prop string
 }
 
-func (a Atom) Sat(g *Graph) StateSet {
-	// We trust caller to give a subset of g.States; no check here.
-	return a.States.Copy()
+func Atom(prop string) Formula {
+	return AtomFormula{Prop: prop}
 }
 
-// Not: ¬φ
-type Not struct {
-	F Formula
-}
-
-func (n Not) Sat(g *Graph) StateSet {
-	all := Universe(g)
-	satF := n.F.Sat(g)
-	return all.Difference(satF)
-}
-
-// And: (φ ∧ ψ)
-type And struct {
-	Left, Right Formula
-}
-
-func (a And) Sat(g *Graph) StateSet {
-	l := a.Left.Sat(g)
-	r := a.Right.Sat(g)
-	return l.Intersect(r)
-}
-
-// Or: (φ ∨ ψ)
-type Or struct {
-	Left, Right Formula
-}
-
-func (o Or) Sat(g *Graph) StateSet {
-	l := o.Left.Sat(g)
-	r := o.Right.Sat(g)
-	return l.Union(r)
-}
-
-// EX φ: "there exists a next state where φ holds"
-type EX struct {
-	F Formula
-}
-
-func (e EX) Sat(g *Graph) StateSet {
-	satF := e.F.Sat(g)
-	return Pre_E(satF, g)
-}
-
-// AX φ: "for all next states, φ holds"
-type AX struct {
-	F Formula
-}
-
-func (a AX) Sat(g *Graph) StateSet {
-	satF := a.F.Sat(g)
-	return Pre_A(satF, g)
-}
-
-// EU(p, q): "there exists a path where p holds UNTIL q holds"
-type EU struct {
-	P, Q Formula
-}
-
-func (eu EU) Sat(g *Graph) StateSet {
-	satP := eu.P.Sat(g)
-	satQ := eu.Q.Sat(g)
-
-	// Least fixpoint:
-	// W0 = Sat(Q)
-	// W_{i+1} = W_i ∪ (Sat(P) ∩ Pre_E(W_i))
-	W := satQ.Copy()
-	for {
-		pre := Pre_E(W, g).Intersect(satP)
-		next := W.Union(pre)
-		if next.Equals(W) {
-			return W
+func (a AtomFormula) Sat(g *Graph) StateSet {
+	res := NewStateSet()
+	for _, s := range g.States() {
+		if g.HasLabel(s, a.Prop) {
+			res.Add(s)
 		}
-		W = next
 	}
+	return res
 }
 
-// EG φ: "there exists a path where φ holds globally (forever)"
-type EG struct {
-	F Formula
+// ----- boolean connectives -----
+
+type NotFormula struct {
+	Inner Formula
 }
 
-func (eg EG) Sat(g *Graph) StateSet {
-	satP := eg.F.Sat(g)
+func Not(inner Formula) Formula {
+	return NotFormula{Inner: inner}
+}
 
-	// Greatest fixpoint:
-	// Start with all states where φ holds,
-	// iteratively remove states that cannot stay in φ forever
-	// (i.e., have no successor in the current set).
-	Z := satP.Copy()
-	for {
-		next := NewStateSet()
-		for s := range Z {
-			succs := g.Succ[s]
-			// keep s if it has at least one successor in Z
-			keep := false
-			for _, s2 := range succs {
-				if Z.Has(s2) {
-					keep = true
+func (n NotFormula) Sat(g *Graph) StateSet {
+	inner := n.Inner.Sat(g)
+	res := NewStateSet()
+	for _, s := range g.States() {
+		if !inner.Contains(s) {
+			res.Add(s)
+		}
+	}
+	return res
+}
+
+type AndFormula struct {
+	Left, Right Formula
+}
+
+func And(l, r Formula) Formula {
+	return AndFormula{Left: l, Right: r}
+}
+
+func (a AndFormula) Sat(g *Graph) StateSet {
+	L := a.Left.Sat(g)
+	R := a.Right.Sat(g)
+	res := NewStateSet()
+	for _, s := range g.States() {
+		if L.Contains(s) && R.Contains(s) {
+			res.Add(s)
+		}
+	}
+	return res
+}
+
+type OrFormula struct {
+	Left, Right Formula
+}
+
+func Or(l, r Formula) Formula {
+	return OrFormula{Left: l, Right: r}
+}
+
+func (o OrFormula) Sat(g *Graph) StateSet {
+	L := o.Left.Sat(g)
+	R := o.Right.Sat(g)
+	res := NewStateSet()
+	for _, s := range g.States() {
+		if L.Contains(s) || R.Contains(s) {
+			res.Add(s)
+		}
+	}
+	return res
+}
+
+// Implies(p, q) = Or(Not(p), q).
+func Implies(p, q Formula) Formula {
+	return Or(Not(p), q)
+}
+
+// ----- EX and AX -----
+
+type EXFormula struct {
+	Inner Formula
+}
+
+func EX(inner Formula) Formula {
+	return EXFormula{Inner: inner}
+}
+
+func (e EXFormula) Sat(g *Graph) StateSet {
+	target := e.Inner.Sat(g)
+	res := NewStateSet()
+	for _, s := range g.States() {
+		for _, t := range g.Succ(s) {
+			if target.Contains(t) {
+				res.Add(s)
+				break
+			}
+		}
+	}
+	return res
+}
+
+type AXFormula struct {
+	Inner Formula
+}
+
+func AX(inner Formula) Formula {
+	return AXFormula{Inner: inner}
+}
+
+func (a AXFormula) Sat(g *Graph) StateSet {
+	target := a.Inner.Sat(g)
+	res := NewStateSet()
+	for _, s := range g.States() {
+		succs := g.Succ(s)
+		if len(succs) == 0 {
+			// Vacuum truth: if no successors, AX φ holds.
+			res.Add(s)
+			continue
+		}
+		allGood := true
+		for _, t := range succs {
+			if !target.Contains(t) {
+				allGood = false
+				break
+			}
+		}
+		if allGood {
+			res.Add(s)
+		}
+	}
+	return res
+}
+
+// ----- EU (E[φ U ψ]) -----
+
+type EUFormula struct {
+	Phi Formula
+	Psi Formula
+}
+
+func EU(phi, psi Formula) Formula {
+	return EUFormula{Phi: phi, Psi: psi}
+}
+
+func (f EUFormula) Sat(g *Graph) StateSet {
+	phiSet := f.Phi.Sat(g)
+	psiSet := f.Psi.Sat(g)
+
+	// Standard least fixpoint algorithm:
+	// X0 = ψ
+	// Xi+1 = Xi ∪ { s | s ∈ φ and ∃ succ in Xi }
+	X := psiSet.Clone()
+	changed := true
+	for changed {
+		changed = false
+		for _, s := range g.States() {
+			if X.Contains(s) {
+				continue
+			}
+			if !phiSet.Contains(s) {
+				continue
+			}
+			for _, t := range g.Succ(s) {
+				if X.Contains(t) {
+					X.Add(s)
+					changed = true
 					break
 				}
 			}
-			if keep {
-				next.Add(s)
+		}
+	}
+	return X
+}
+
+// ----- EF (exists eventually φ) -----
+
+type EFFormula struct {
+	Inner Formula
+}
+
+func EF(inner Formula) Formula {
+	return EFFormula{Inner: inner}
+}
+
+func (f EFFormula) Sat(g *Graph) StateSet {
+	target := f.Inner.Sat(g)
+
+	// Backward reachability:
+	// X0 = target
+	// Xi+1 = Xi ∪ { s | ∃ succ in Xi }
+	X := target.Clone()
+	changed := true
+	for changed {
+		changed = false
+		for _, s := range g.States() {
+			if X.Contains(s) {
+				continue
+			}
+			for _, t := range g.Succ(s) {
+				if X.Contains(t) {
+					X.Add(s)
+					changed = true
+					break
+				}
 			}
 		}
-		if next.Equals(Z) {
-			return Z
-		}
-		Z = next
 	}
+	return X
 }
 
-// EF φ: "there exists a path where EVENTUALLY φ" (derived from EU)
-type EF struct {
-	F Formula
+// ----- EG (exists globally φ) -----
+
+type EGFormula struct {
+	Inner Formula
 }
 
-func (ef EF) Sat(g *Graph) StateSet {
-	// EF φ ≡ E[ true U φ ]
-	trueSet := Universe(g)
-	return EU{P: Atom{States: trueSet}, Q: ef.F}.Sat(g)
+func EG(inner Formula) Formula {
+	return EGFormula{Inner: inner}
 }
 
-// AF φ: "for all paths, EVENTUALLY φ"
-// AF φ ≡ ¬EG ¬φ
-type AF struct {
-	F Formula
+func (f EGFormula) Sat(g *Graph) StateSet {
+	phiSet := f.Inner.Sat(g)
+
+	// Standard algorithm:
+	// Start with Z = { s | s satisfies φ }
+	// Repeatedly remove any s in Z that has no successor in Z.
+	Z := phiSet.Clone()
+	changed := true
+	for changed {
+		changed = false
+		for s := range Z {
+			succs := g.Succ(s)
+			hasSuccInZ := false
+			for _, t := range succs {
+				if Z.Contains(t) {
+					hasSuccInZ = true
+					break
+				}
+			}
+			// No successors in Z => cannot sustain φ globally along a path
+			if !hasSuccInZ {
+				delete(Z, s)
+				changed = true
+			}
+		}
+	}
+	return Z
 }
 
-func (af AF) Sat(g *Graph) StateSet {
-	notF := Not{F: af.F}
-	egNotF := EG{F: notF}
-	bad := egNotF.Sat(g)
-	all := Universe(g)
-	return all.Difference(bad)
+// ----- AF and AG via dualities -----
+
+type AFFormula struct {
+	Inner Formula
 }
 
-// AG φ: "for all paths, φ holds globally"
-// AG φ ≡ ¬EF ¬φ
-type AG struct {
-	F Formula
+func AF(inner Formula) Formula {
+	return AFFormula{Inner: inner}
 }
 
-func (ag AG) Sat(g *Graph) StateSet {
-	notF := Not{F: ag.F}
-	efNotF := EF{F: notF}
-	bad := efNotF.Sat(g)
-	all := Universe(g)
-	return all.Difference(bad)
+func (f AFFormula) Sat(g *Graph) StateSet {
+	// AF φ = ¬ EG ¬φ
+	return Not(EG(Not(f.Inner))).Sat(g)
 }
 
-// SatIn evaluates a formula and asks if a given initial state satisfies it.
-func SatIn(f Formula, g *Graph, init StateID) bool {
-	satSet := f.Sat(g)
-	return satSet.Has(init)
+type AGFormula struct {
+	Inner Formula
 }
 
+func AG(inner Formula) Formula {
+	return AGFormula{Inner: inner}
+}
+
+func (f AGFormula) Sat(g *Graph) StateSet {
+	// AG φ = ¬ EF ¬φ
+	return Not(EF(Not(f.Inner))).Sat(g)
+}

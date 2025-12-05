@@ -108,20 +108,12 @@ func (c *Consumer) Ready(w *kripke.World) []kripke.Step {
 }
 
 func main() {
-	// ----------------------------
-	// 1) Build world: Consumer owns a buffered channel; Producer writes to it.
-	// ----------------------------
-
 	consumerID := "C1"
 	chanName := "inbox"
 
-	// Channel owned by the consumer.
 	inbox := kripke.NewChannel(consumerID, chanName, 2) // capacity=2
 
-	// Consumer actor.
 	consumer := NewConsumer(consumerID, chanName)
-
-	// Producer actor writes into consumer's inbox.
 	targetAddr := inbox.Address()
 	producer := NewProducer("P1", targetAddr, 5) // send 1..5
 
@@ -130,15 +122,7 @@ func main() {
 
 	w := kripke.NewWorld(procs, chans, 1) // fixed seed for reproducibility
 
-	// ----------------------------
-	// 2) Run the engine for a bounded number of steps.
-	// ----------------------------
-
 	w.RunSteps(50)
-
-	// ----------------------------
-	// 3) Print final state and event log.
-	// ----------------------------
 
 	fmt.Println("=== Kripke engine demo (Producer/Consumer) ===")
 	fmt.Printf("Producer sent up to: %d (max %d)\n", producer.nextValue-1, producer.maxValue)
