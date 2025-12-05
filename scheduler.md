@@ -1,6 +1,30 @@
 Scheduler rules
 =============
 
+interaction of communicating actors in bakery scenario
+
+```mermaid
+sequenceDiagram
+    participant B as Bakery
+    participant T as Truck
+    participant S as Storefront
+    participant C as Customer
+
+    Note over B,T: Bakery writes into Truck.breadRack (owned by Truck)
+    B->>T: B.c[breadRack] ! loaf
+    T-->>T: B.c[breadRack] ? x / load loaf into cargo
+
+    Note over T,S: Truck delivers loaves into Storefront.stock
+    T->>S: S.c[stock] ! loaf
+    S-->>S: S.c[stock] ? x / increase inventory
+
+    Note over C,S: Customer buys bread from Storefront
+    C->>S: order
+    S->>C: receipt
+```
+
+flowchard of steps in scheduler
+
 ```mermaid
 flowchart TD
     A[Current world state S]
