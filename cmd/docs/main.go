@@ -34,6 +34,21 @@ type openAIRequest struct {
 	Input []Message `json:"input"`
 }
 
+// RunRequest asks the server to run a whitelisted Go command.
+type RunRequest struct {
+    Command string   `json:"command"`         // e.g. "orders", "mm1"
+    Args    []string `json:"args,omitempty"`  // e.g. ["AG !failed"]
+}
+
+// RunResponse is what /api/run returns.
+type RunResponse struct {
+    Command []string `json:"command"`         // full command actually run
+    Stdout  string   `json:"stdout"`
+    Stderr  string   `json:"stderr"`
+    ExitOK  bool     `json:"exit_ok"`
+    Error   string   `json:"error,omitempty"` // internal error if any
+}
+
 func main() {
 	apiKey := os.Getenv("OPENAI_API_KEY")
 	if apiKey == "" {

@@ -1,18 +1,19 @@
 Diagrams
 ===============
 
+
 ```mermaid
 stateDiagram-v2
   [*] --> UnknownKey
 
   state UnknownKey {
-    [*] --> Unsolved
-    Unsolved --> VowelSolved : solve 6-letter channel
+    [*] --> Unsovled
+    Unsovled --> VowelSolved : solve 6-letter channel
     VowelSolved --> ConsonantSolved : solve 20-letter channel
     ConsonantSolved --> UniqueKey : combine channels
   }
 
-  state Unsolved {
+  state Unsovled {
     [*] --> ManyCandidates
     ManyCandidates --> ManyCandidates : observe traffic\n(refine vowel/cons.)
   }
@@ -25,3 +26,4 @@ stateDiagram-v2
     attackerKnowsKey = true
     keySpaceSize = 1
   end note
+```
