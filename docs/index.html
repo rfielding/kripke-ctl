@@ -1,0 +1,474 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>kripke-ctl Docs</title>
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+
+  <!-- Hardcoded dark mode -->
+  <style>
+    :root {
+      color-scheme: dark;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+        sans-serif;
+      background: #111;
+      color: #ddd;
+      display: flex;
+      height: 100vh;
+      overflow: hidden;
+    }
+
+    #sidebar {
+      width: 260px;
+      background: #000;
+      color: #ccc;
+      border-right: 1px solid #333;
+      padding: 0.75rem 0.5rem;
+      display: flex;
+      flex-direction: column;
+    }
+
+    #sidebar h1 {
+      font-size: 1.1rem;
+      margin: 0 0 0.6rem 0.4rem;
+      color: #fff;
+    }
+
+    #sidebar h2 {
+      font-size: 0.9rem;
+      margin: 0.8rem 0 0.3rem 0.4rem;
+      color: #aaa;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+
+    #sidebar a {
+      color: #9cf;
+      text-decoration: none;
+      display: block;
+      padding: 0.35rem 0.7rem;
+      border-radius: 4px;
+      font-size: 0.9rem;
+    }
+
+    #sidebar a:hover {
+      background: #222;
+    }
+
+    #sidebar a.active {
+      background: #1b2733;
+      color: #e0f0ff;
+    }
+
+    #main {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+      overflow: hidden;
+    }
+
+    #content-container {
+      flex: 1;
+      overflow-y: auto;
+      padding: 1rem 2rem;
+      background: #111;
+      color: #ddd;
+    }
+
+    #content-container h1,
+    #content-container h2,
+    #content-container h3 {
+      color: #fff;
+    }
+
+    #content-container pre {
+      background: #1b1b1b;
+      padding: 0.75rem 1rem;
+      border-radius: 6px;
+      overflow-x: auto;
+      font-size: 0.9rem;
+    }
+
+    #content-container code {
+      background: #1b1b1b;
+      padding: 0.15rem 0.4rem;
+      border-radius: 4px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
+        "Liberation Mono", "Courier New", monospace;
+      font-size: 0.9rem;
+    }
+
+    #content-container pre code {
+      padding: 0;
+      background: transparent;
+    }
+
+    a {
+      color: #9cf;
+    }
+
+    hr {
+      border: 0;
+      border-top: 1px solid #333;
+      margin: 1.5rem 0;
+    }
+
+    /* AI Tools panel */
+
+    #ai-tools {
+      background: #000;
+      padding: 1rem 1.5rem;
+      border-top: 1px solid #333;
+      box-shadow: 0 -4px 12px rgba(0, 0, 0, 0.5);
+    }
+
+    #ai-tools h2 {
+      margin-top: 0;
+      font-size: 1rem;
+      color: #fff;
+    }
+
+    #ai-tools label {
+      display: block;
+      font-size: 0.85rem;
+      color: #aaa;
+      margin-bottom: 0.25rem;
+    }
+
+    #ai-tools select,
+    #ai-tools button {
+      background: #222;
+      color: #ccc;
+      border: 1px solid #444;
+      border-radius: 4px;
+      padding: 0.35rem 0.5rem;
+      font-size: 0.9rem;
+    }
+
+    #ai-tools select {
+      min-width: 180px;
+    }
+
+    #ai-tools button {
+      cursor: pointer;
+      margin-left: 0.5rem;
+    }
+
+    #ai-tools button:hover {
+      background: #333;
+    }
+
+    #ai-tools textarea {
+      width: 100%;
+      min-height: 70px;
+      margin-top: 0.5rem;
+      background: #222;
+      color: #eee;
+      border: 1px solid #444;
+      border-radius: 4px;
+      padding: 0.5rem;
+      resize: vertical;
+      font-family: inherit;
+      font-size: 0.9rem;
+    }
+
+    #ai-output {
+      margin-top: 0.75rem;
+      font-size: 0.9rem;
+      color: #ddd;
+    }
+
+    #ai-output pre {
+      background: #111;
+      border-radius: 4px;
+      padding: 0.5rem 0.75rem;
+      max-height: 220px;
+      overflow: auto;
+      font-size: 0.85rem;
+    }
+
+    #ai-output .error {
+      color: #ff8080;
+      white-space: pre-wrap;
+    }
+
+    #ai-mermaid {
+      margin-top: 0.75rem;
+      background: #111;
+      border-radius: 4px;
+      padding: 0.5rem;
+      overflow: auto;
+    }
+
+    #ai-meta {
+      margin-top: 0.5rem;
+      font-size: 0.85rem;
+      color: #aaa;
+    }
+
+    /* Mermaid diagrams inside docs */
+    .mermaid {
+      background: #111;
+      border-radius: 4px;
+      padding: 0.5rem;
+      margin: 1rem 0;
+    }
+
+    @media (max-width: 800px) {
+      body {
+        flex-direction: column;
+      }
+      #sidebar {
+        width: 100%;
+        flex-direction: row;
+        overflow-x: auto;
+        border-right: none;
+        border-bottom: 1px solid #333;
+      }
+      #sidebar h1,
+      #sidebar h2 {
+        display: none;
+      }
+      #sidebar a {
+        white-space: nowrap;
+        padding: 0.35rem 0.5rem;
+      }
+      #main {
+        height: calc(100vh - 48px);
+      }
+    }
+  </style>
+
+  <!-- marked.js for Markdown rendering -->
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+
+  <!-- mermaid.js for diagrams -->
+  <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+  <script>
+    mermaid.initialize({
+      startOnLoad: false,
+      theme: "dark",
+    });
+  </script>
+</head>
+<body>
+  <div id="sidebar">
+    <h1>kripke-ctl</h1>
+
+    <h2>Docs</h2>
+    <a href="#" data-doc="overview.md" class="active">Overview</a>
+    <a href="#" data-doc="tutorial.md">Tutorial</a>
+    <a href="#" data-doc="business.md">Business models</a>
+    <a href="#" data-doc="engine.md">Engine</a>
+    <a href="#" data-doc="ctl.md">CTL</a>
+    <a href="#" data-doc="examples.md">Examples</a>
+    <a href="#" data-doc="diagrams.md">Diagrams</a>
+    <a href="#" data-doc="api.md">API & CLI</a>
+  </div>
+
+  <div id="main">
+    <div id="content-container">
+      <div id="content">Loading…</div>
+    </div>
+
+    <div id="ai-tools">
+      <h2>AI Tools: from English to Kripke artifacts</h2>
+
+      <div style="display:flex;align-items:center;gap:0.5rem;flex-wrap:wrap;">
+        <div>
+          <label for="ai-mode">What to generate</label>
+          <select id="ai-mode">
+            <option value="state_machine">State machine (Mermaid)</option>
+            <option value="sequence">Interaction diagram (Mermaid)</option>
+            <option value="line_chart">Line chart (Mermaid)</option>
+            <option value="pie_chart">Pie chart (Mermaid)</option>
+          </select>
+        </div>
+        <div style="flex:1;min-width:180px;"></div>
+        <button id="ai-generate">Generate diagram</button>
+      </div>
+
+      <label for="ai-prompt" style="margin-top:0.75rem;">
+        Describe the model / behavior in English
+      </label>
+      <textarea
+        id="ai-prompt"
+        placeholder="Example: Model an M/M/1 queue with λ and μ, with a hard cap of 10 items in the system. Generate a Mermaid state diagram where states are queue length 0..10 and transitions are arrivals/departures."
+      ></textarea>
+
+      <div id="ai-output">
+        <!-- status / errors / raw text -->
+      </div>
+      <div id="ai-mermaid" class="mermaid" style="display:none;"></div>
+      <div id="ai-meta"></div>
+    </div>
+  </div>
+
+  <script>
+    // --- Simple docs navigation ------------------------------------------------
+
+    const contentEl = document.getElementById("content");
+    const sidebarLinks = Array.from(
+      document.querySelectorAll("#sidebar a[data-doc]")
+    );
+
+    async function loadDoc(name) {
+      try {
+        const resp = await fetch(`/docs/${name}`);
+        if (!resp.ok) {
+          contentEl.innerHTML =
+            `<p>Failed to load <code>${name}</code>: ${resp.status}</p>`;
+          return;
+        }
+        const md = await resp.text();
+        const html = marked.parse(md);
+        contentEl.innerHTML = html;
+
+        // Re-render any mermaid blocks in the markdown
+        const mermaidBlocks = contentEl.querySelectorAll("code.language-mermaid");
+        if (mermaidBlocks.length > 0) {
+          mermaidBlocks.forEach((codeBlock) => {
+            const pre = codeBlock.parentElement;
+            const div = document.createElement("div");
+            div.className = "mermaid";
+            div.textContent = codeBlock.textContent;
+            pre.replaceWith(div);
+          });
+          mermaid.init(undefined, contentEl.querySelectorAll(".mermaid"));
+        }
+      } catch (err) {
+        contentEl.innerHTML =
+          `<p>Error loading <code>${name}</code>: ${String(err)}</p>`;
+      }
+    }
+
+    sidebarLinks.forEach((link) => {
+      link.addEventListener("click", (e) => {
+        e.preventDefault();
+        const doc = link.getAttribute("data-doc");
+        sidebarLinks.forEach((l) => l.classList.remove("active"));
+        link.classList.add("active");
+        loadDoc(doc);
+      });
+    });
+
+    // Initial doc
+    loadDoc("overview.md");
+
+    // --- AI Tools: /api/chat using Responses API proxy ------------------------
+
+    const aiModeEl = document.getElementById("ai-mode");
+    const aiPromptEl = document.getElementById("ai-prompt");
+    const aiGenerateBtn = document.getElementById("ai-generate");
+    const aiOutputEl = document.getElementById("ai-output");
+    const aiMermaidEl = document.getElementById("ai-mermaid");
+    const aiMetaEl = document.getElementById("ai-meta");
+
+    function setAIStatus(msg, isError = false) {
+      aiOutputEl.innerHTML = "";
+      const pre = document.createElement("pre");
+      pre.className = isError ? "error" : "";
+      pre.textContent = msg;
+      aiOutputEl.appendChild(pre);
+      if (isError) {
+        aiMermaidEl.style.display = "none";
+        aiMermaidEl.textContent = "";
+        aiMetaEl.textContent = "";
+      }
+    }
+
+    function extractTextFromResponses(data) {
+      // Expecting Responses API shape:
+      // data.output[0].content[0].text (type: "output_text")
+      if (!data || !Array.isArray(data.output) || data.output.length === 0) {
+        return "";
+      }
+      const content = data.output[0].content || [];
+      let buf = "";
+      for (const item of content) {
+        if (item.type === "output_text" && typeof item.text === "string") {
+          buf += item.text;
+        }
+      }
+      return buf.trim();
+    }
+
+    function extractMermaidFromText(text) {
+      if (!text) return { mermaid: "", notes: "" };
+
+      // If the model wraps the diagram in ```mermaid fences, pull it out.
+      const fence = "```mermaid";
+      const start = text.indexOf(fence);
+      if (start !== -1) {
+        const rest = text.slice(start + fence.length);
+        const end = rest.indexOf("```");
+        const diagram = (end === -1 ? rest : rest.slice(0, end)).trim();
+        const notes =
+          text.slice(0, start).trim() +
+          (end === -1 ? "" : "\n\n" + rest.slice(end + 3).trim());
+        return { mermaid: diagram, notes: notes.trim() };
+      }
+
+      // Otherwise assume the whole thing is a Mermaid diagram
+      return { mermaid: text.trim(), notes: "" };
+    }
+
+    aiGenerateBtn.addEventListener("click", async () => {
+      const mode = aiModeEl.value;
+      const prompt = aiPromptEl.value.trim();
+
+      if (!prompt) {
+        setAIStatus("Please enter a description of what to generate.", true);
+        return;
+      }
+
+      setAIStatus("Calling /api/chat…");
+
+      try {
+        const resp = await fetch("/api/chat", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          // NOTE: Keep this structure to match cmd/docs ChatRequest
+          body: JSON.stringify({
+            kind: mode,
+            prompt: prompt,
+          }),
+        });
+
+        if (!resp.ok) {
+          const text = await resp.text();
+          setAIStatus(`Error from server: ${resp.status}\n\n${text}`, true);
+          return;
+        }
+
+        const data = await resp.json();
+
+        // If the server already returns { title, mermaid, notes },
+        // respect that. Otherwise, treat it as a raw Responses object.
+        if (
+          typeof data === "object" &&
+          data !== null &&
+          typeof data.mermaid === "string"
+        ) {
+          // Old/simple shape from tools layer
+          if (data.notes) {
+            setAIStatus(data.notes, false);
+          } else {
+            setAIStatus("Diagram generated.", false);
+          }
+          aiMermaidEl.textContent = data.mermaid;
+          aiMermaidEl.style.display = "block";
+          mermaid.init(undefined, aiMermaidEl);
+          aiMetaEl.text
