@@ -52,7 +52,7 @@ func (p *Producer) Ready(w *kripke.World) []kripke.Step {
 		}
 		ok := kripke.SendMessage(w, msg)
 		if !ok {
-			// Should not happen if CanSend() was true in Ready.
+			// Should not happen if CanSend() was true.
 			return
 		}
 		p.nextValue++
@@ -91,7 +91,7 @@ func (c *Consumer) Ready(w *kripke.World) []kripke.Step {
 	}
 
 	steps = append(steps, func(w *kripke.World) {
-		msg, ok := kripke.RecvMessage(ch)
+		msg, ok := kripke.RecvAndLog(w, ch)
 		if !ok {
 			return
 		}
@@ -102,18 +102,6 @@ func (c *Consumer) Ready(w *kripke.World) []kripke.Step {
 		}
 		c.RecvCount++
 		c.LastRecvAt = w.Time
-
-		// Log an Event at receive time.
-		ev := kripke.Event{
-			Time:     w.Time,
-			From:     msg.From,
-			FromChan: msg.From.ChannelName,
-			To:       msg.To,
-			ToChan:   msg.To.ChannelName,
-			Payload:  msg.Payload,
-			ReplyTo:  msg.ReplyTo,
-		}
-		w.LogEvent(ev)
 	})
 
 	return steps
@@ -157,18 +145,18 @@ func main() {
 	fmt.Printf("Consumer total: %d (RecvCount=%d, LastRecvAt=%d)\n",
 		consumer.Total, consumer.RecvCount, consumer.LastRecvAt)
 
-	fmt.Printf("Total events (receives logged): %d\n", len(w.Events))
+	fmt.Printf("Total receive events: %d\n", len(w.Events))
 	for _, ev := range w.Events {
 		fmt.Printf(
-			"t=%d: %s -> %s payload=%v\n",
+			"t=%d MsgID=%d CorrID=%d %s -> %s payload=%v qDelay=%d (enq=%d)\n",
 			ev.Time,
+			ev.MsgID,
+			ev.CorrelationID,
 			ev.From.String(),
 			ev.To.String(),
 			ev.Payload,
+			ev.QueueDelay,
+			ev.EnqueueTime,
 		)
 	}
-
-	// CTL demo remains in kripke/ctl_test.go as unit tests.
-	// Once the engine side is stable, we can wire a CTL example back into main if desired.
 }
-
