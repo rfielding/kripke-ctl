@@ -1,0 +1,19 @@
+--- cmd/gendiagrams/main.go
++++ cmd/gendiagrams/main.go
+@@ -28,12 +28,12 @@ func main() {
+ 
+     graph, initial := spec.BuildGraph()
+ 
+-    var buf bytes.Buffer
+-    buf.WriteString("```mermaid
+-")
++    var buf bytes.Buffer
++
++    // Start mermaid fenced block
++    buf.WriteString("```mermaid\n")
+ 
+     if err := kripke.WriteMermaidStateDiagram(graph, initial, &buf); err != nil {
+         fmt.Fprintln(os.Stderr, "write mermaid:", err)
+         os.Exit(1)
+     }
+-    buf.WriteString("```
