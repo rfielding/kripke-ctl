@@ -1,0 +1,515 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>kripke-ctl: LLM Workflow Demo</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: #1a1a1a;
+            color: #e0e0e0;
+            line-height: 1.6;
+        }
+        
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        
+        header {
+            background: #2a2a2a;
+            padding: 20px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            border-left: 4px solid #00ff88;
+        }
+        
+        h1 {
+            font-size: 28px;
+            margin-bottom: 10px;
+            color: #00ff88;
+        }
+        
+        .subtitle {
+            color: #888;
+            font-size: 14px;
+        }
+        
+        .nav {
+            margin-top: 15px;
+        }
+        
+        .nav a {
+            color: #00ff88;
+            text-decoration: none;
+            margin-right: 20px;
+            font-weight: 500;
+        }
+        
+        .nav a:hover {
+            text-decoration: underline;
+        }
+        
+        .workflow {
+            background: #2a2a2a;
+            padding: 20px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            border: 1px solid #3a3a3a;
+        }
+        
+        .workflow-steps {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-top: 15px;
+        }
+        
+        .step {
+            flex: 1;
+            text-align: center;
+            padding: 10px;
+        }
+        
+        .step-number {
+            background: #00ff88;
+            color: #1a1a1a;
+            width: 30px;
+            height: 30px;
+            border-radius: 50%;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+            margin-bottom: 8px;
+        }
+        
+        .arrow {
+            color: #00ff88;
+            font-size: 24px;
+        }
+        
+        .main-content {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+        }
+        
+        .panel {
+            background: #2a2a2a;
+            border-radius: 8px;
+            padding: 20px;
+            border: 1px solid #3a3a3a;
+        }
+        
+        .panel h2 {
+            margin-bottom: 15px;
+            color: #00ff88;
+            font-size: 18px;
+        }
+        
+        textarea {
+            width: 100%;
+            min-height: 200px;
+            background: #1a1a1a;
+            color: #e0e0e0;
+            border: 1px solid #3a3a3a;
+            border-radius: 4px;
+            padding: 12px;
+            font-family: 'Monaco', 'Courier New', monospace;
+            font-size: 14px;
+            resize: vertical;
+        }
+        
+        textarea:focus {
+            outline: none;
+            border-color: #00ff88;
+        }
+        
+        button {
+            background: #00ff88;
+            color: #1a1a1a;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 4px;
+            font-weight: bold;
+            cursor: pointer;
+            font-size: 14px;
+            margin-top: 15px;
+            transition: transform 0.1s;
+        }
+        
+        button:hover {
+            transform: scale(1.05);
+        }
+        
+        button:active {
+            transform: scale(0.95);
+        }
+        
+        button:disabled {
+            background: #444;
+            cursor: not-allowed;
+            transform: none;
+        }
+        
+        .output {
+            background: #1a1a1a;
+            border: 1px solid #3a3a3a;
+            border-radius: 4px;
+            padding: 15px;
+            min-height: 400px;
+            max-height: 600px;
+            overflow-y: auto;
+            font-family: 'Monaco', 'Courier New', monospace;
+            font-size: 13px;
+        }
+        
+        .output pre {
+            white-space: pre-wrap;
+            word-wrap: break-word;
+        }
+        
+        .loading {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 3px solid #444;
+            border-top-color: #00ff88;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+        
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+        
+        .status {
+            padding: 10px;
+            border-radius: 4px;
+            margin-top: 10px;
+            font-size: 13px;
+        }
+        
+        .status.success {
+            background: #00ff8820;
+            border-left: 4px solid #00ff88;
+        }
+        
+        .status.error {
+            background: #ff000020;
+            border-left: 4px solid #ff0000;
+        }
+        
+        .status.info {
+            background: #0088ff20;
+            border-left: 4px solid #0088ff;
+        }
+        
+        .projects-list {
+            margin-top: 20px;
+        }
+        
+        .project-item {
+            background: #1a1a1a;
+            padding: 12px;
+            border-radius: 4px;
+            margin-bottom: 10px;
+            cursor: pointer;
+            border: 1px solid #3a3a3a;
+            transition: border-color 0.2s;
+        }
+        
+        .project-item:hover {
+            border-color: #00ff88;
+        }
+        
+        .project-time {
+            color: #888;
+            font-size: 12px;
+        }
+        
+        .tabs {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 15px;
+        }
+        
+        .tab {
+            background: #1a1a1a;
+            border: 1px solid #3a3a3a;
+            padding: 8px 16px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+        }
+        
+        .tab.active {
+            background: #00ff88;
+            color: #1a1a1a;
+            border-color: #00ff88;
+        }
+        
+        .tab-content {
+            display: none;
+        }
+        
+        .tab-content.active {
+            display: block;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🤖 kripke-ctl: LLM Workflow Demo</h1>
+            <p class="subtitle">English → Go Model → Verification → Diagrams</p>
+            <div class="nav">
+                <a href="/docs/">📚 Documentation</a>
+                <a href="https://github.com/rfielding/kripke-ctl">💻 GitHub</a>
+            </div>
+        </header>
+        
+        <div class="workflow">
+            <h2>The Workflow</h2>
+            <div class="workflow-steps">
+                <div class="step">
+                    <div class="step-number">1</div>
+                    <div>English Description</div>
+                </div>
+                <div class="arrow">→</div>
+                <div class="step">
+                    <div class="step-number">2</div>
+                    <div>LLM Generates Model</div>
+                </div>
+                <div class="arrow">→</div>
+                <div class="step">
+                    <div class="step-number">3</div>
+                    <div>Execute & Verify</div>
+                </div>
+                <div class="arrow">→</div>
+                <div class="step">
+                    <div class="step-number">4</div>
+                    <div>Diagrams & Docs</div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="main-content">
+            <div class="panel">
+                <h2>📝 Step 1: Describe in English</h2>
+                <textarea id="english-input" placeholder="Example:
+
+Create a producer-consumer system where:
+- Producer sends 10 items to Consumer
+- Channel has capacity of 3
+- Track: items sent, items received, total delay
+- Show: sequence diagram, metrics, throughput
+
+Be specific about:
+- Number of actors
+- What messages they send
+- What state variables to track
+- What diagrams/metrics to generate">Create a producer-consumer system where the Producer sends 10 messages to the Consumer through a buffered channel with capacity 3. Track the number of items sent and received, and generate a sequence diagram showing the message flow.</textarea>
+                
+                <button id="generate-btn" onclick="generate()">
+                    🚀 Generate & Execute Model
+                </button>
+                
+                <div id="status"></div>
+            </div>
+            
+            <div class="panel">
+                <h2>📋 Recent Projects</h2>
+                <div id="projects-list" class="projects-list">
+                    <p style="color: #888;">No projects yet. Generate one to get started!</p>
+                </div>
+            </div>
+        </div>
+        
+        <div style="margin-top: 20px;">
+            <div class="panel">
+                <div class="tabs">
+                    <div class="tab active" onclick="showTab('go-code')">Step 2: Go Model</div>
+                    <div class="tab" onclick="showTab('markdown')">Step 4: Output</div>
+                </div>
+                
+                <div id="go-code" class="tab-content active">
+                    <div class="output" id="go-output">
+                        <p style="color: #888;">Generated Go model will appear here...</p>
+                    </div>
+                </div>
+                
+                <div id="markdown" class="tab-content">
+                    <div class="output" id="markdown-output">
+                        <p style="color: #888;">Execution output will appear here...</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        let currentProject = null;
+        
+        function showTab(tabName) {
+            document.querySelectorAll('.tab').forEach(tab => tab.classList.remove('active'));
+            document.querySelectorAll('.tab-content').forEach(content => content.classList.remove('active'));
+            
+            event.target.classList.add('active');
+            document.getElementById(tabName).classList.add('active');
+        }
+        
+        async function generate() {
+            const english = document.getElementById('english-input').value.trim();
+            if (!english) {
+                showStatus('Please enter an English description', 'error');
+                return;
+            }
+            
+            const btn = document.getElementById('generate-btn');
+            btn.disabled = true;
+            btn.innerHTML = '<span class="loading"></span> Generating...';
+            
+            showStatus('🤖 Calling Claude API to generate model...', 'info');
+            document.getElementById('go-output').innerHTML = '<p style="color: #888;">Generating...</p>';
+            document.getElementById('markdown-output').innerHTML = '<p style="color: #888;">Waiting for execution...</p>';
+            
+            try {
+                const response = await fetch('/api/generate', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ english })
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                
+                const data = await response.json();
+                
+                if (data.error) {
+                    throw new Error(data.error);
+                }
+                
+                currentProject = data.model_id;
+                showStatus('✅ Model generated! Executing...', 'success');
+                
+                // Show Go code
+                document.getElementById('go-output').innerHTML = `<pre>${escapeHtml(data.go_code)}</pre>`;
+                
+                // Poll for markdown output
+                if (data.executing) {
+                    pollForOutput(data.model_id);
+                }
+                
+                // Refresh projects list
+                loadProjects();
+                
+            } catch (error) {
+                showStatus(`❌ Error: ${error.message}`, 'error');
+                document.getElementById('go-output').innerHTML = `<p style="color: #ff0000;">Error: ${escapeHtml(error.message)}</p>`;
+            } finally {
+                btn.disabled = false;
+                btn.innerHTML = '🚀 Generate & Execute Model';
+            }
+        }
+        
+        async function pollForOutput(projectId) {
+            let attempts = 0;
+            const maxAttempts = 30; // 30 seconds
+            
+            const interval = setInterval(async () => {
+                attempts++;
+                
+                try {
+                    const response = await fetch(`/api/project/${projectId}`);
+                    const data = await response.json();
+                    
+                    if (data.markdown) {
+                        clearInterval(interval);
+                        document.getElementById('markdown-output').innerHTML = `<pre>${escapeHtml(data.markdown)}</pre>`;
+                        showStatus('✅ Execution complete!', 'success');
+                        
+                        // Auto-switch to markdown tab
+                        document.querySelectorAll('.tab')[1].click();
+                    } else if (attempts >= maxAttempts) {
+                        clearInterval(interval);
+                        showStatus('⏱️ Execution timeout', 'error');
+                    }
+                } catch (error) {
+                    console.error('Poll error:', error);
+                }
+            }, 1000);
+        }
+        
+        async function loadProjects() {
+            try {
+                const response = await fetch('/api/projects');
+                const projects = await response.json();
+                
+                if (projects.length === 0) {
+                    document.getElementById('projects-list').innerHTML = 
+                        '<p style="color: #888;">No projects yet.</p>';
+                    return;
+                }
+                
+                const html = projects.map(p => `
+                    <div class="project-item" onclick="loadProject('${p.id}')">
+                        <div>${escapeHtml(p.english.substring(0, 80))}${p.english.length > 80 ? '...' : ''}</div>
+                        <div class="project-time">${new Date(p.created_at).toLocaleString()}</div>
+                    </div>
+                `).join('');
+                
+                document.getElementById('projects-list').innerHTML = html;
+            } catch (error) {
+                console.error('Failed to load projects:', error);
+            }
+        }
+        
+        async function loadProject(projectId) {
+            try {
+                const response = await fetch(`/api/project/${projectId}`);
+                const data = await response.json();
+                
+                currentProject = projectId;
+                document.getElementById('go-output').innerHTML = `<pre>${escapeHtml(data.go_code)}</pre>`;
+                
+                if (data.markdown) {
+                    document.getElementById('markdown-output').innerHTML = `<pre>${escapeHtml(data.markdown)}</pre>`;
+                } else {
+                    document.getElementById('markdown-output').innerHTML = '<p style="color: #888;">Execution in progress...</p>';
+                    pollForOutput(projectId);
+                }
+                
+                showStatus(`✅ Loaded project ${projectId}`, 'success');
+            } catch (error) {
+                showStatus(`❌ Failed to load project: ${error.message}`, 'error');
+            }
+        }
+        
+        function showStatus(message, type) {
+            const status = document.getElementById('status');
+            status.className = `status ${type}`;
+            status.textContent = message;
+        }
+        
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+        
+        // Load projects on page load
+        loadProjects();
+    </script>
+</body>
+</html>

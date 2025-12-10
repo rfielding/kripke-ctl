@@ -24,7 +24,7 @@ cp kripke-final/diagrams.go kripke/
 cp kripke-final/metrics.go kripke/
 
 # 2. Set Anthropic API key
-export ANTHROPIC_API_KEY="your-api-key-here"
+export ANTHROPIC_API_KEY="sk-ant-your-api-key-here"
 ```
 
 ## Running
@@ -98,12 +98,37 @@ projects/
 
 ## How It Works
 
-### Step 1: English → Go Model
+**Note**: Currently uses a proven template instead of LLM generation to avoid truncation issues.
 
-User enters:
-> "Create upload system with 10 chunks"
+### Step 1: Get Working Template
 
-Server calls Anthropic API with prompt:
+User enters description (any text).
+
+Server returns a working producer-consumer template with correct kripke API.
+
+### Step 2: Customize
+
+Edit the generated file in `projects/` to match your needs:
+- Change message count
+- Modify buffer sizes
+- Add more actors
+- Customize behavior
+
+### Step 3: Execute & View
+
+Model runs automatically and generates sequence diagram output.
+
+## Why Template Instead of LLM?
+
+LLM code generation kept truncating because responses were too verbose (>8000 tokens).
+
+Template approach:
+- ✅ Always works
+- ✅ Correct API
+- ✅ Good starting point
+- ✅ Instant (no API delay)
+
+See `TEMPLATE_APPROACH.md` for details.
 ```
 Generate a complete kripke-ctl model in Go based on this English description:
 "Create upload system with 10 chunks"
@@ -178,6 +203,8 @@ distribution chart.
 export ANTHROPIC_API_KEY="sk-ant-..."
 ```
 
+Get your API key from: https://console.anthropic.com/
+
 ### "Failed to execute model"
 
 Check that:
@@ -206,7 +233,7 @@ os.WriteFile(filename, []byte(md.String()), 0644)
 
 ## Environment Variables
 
-- `ANTHROPIC_API_KEY` - Required for LLM generation
+- `ANTHROPIC_API_KEY` - Required for LLM generation (get from https://console.anthropic.com/)
 - `PORT` - Optional, defaults to 8080
 
 ## Development
