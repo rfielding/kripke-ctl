@@ -461,29 +461,21 @@ func main() {
 	content.WriteString(goCode)
 	content.WriteString("\n` + "`" + "`" + "`" + `\n\n")
 	
-	// TLA+ Specification - commented out until API is fixed
-	// The tlaplus.go generator needs to be updated to match the actual kripke API
-	// For now, users can manually write TLA+ specs based on the Go code above
-	
+	// TLA+ Specification
 	content.WriteString("## TLA+ Specification\n\n")
-	content.WriteString("A TLA+ specification can be written based on this model. Use the KripkeLib module for standard operators:\n\n")
+	content.WriteString("A TLA+ specification using KripkeLib operators:\n\n")
+	content.WriteString("` + "`" + "`" + "`" + `tla\n")
+	tlaSpec := w.GenerateTLAPlus("ProducerConsumer")
+	content.WriteString(tlaSpec)
+	content.WriteString("\n` + "`" + "`" + "`" + `\n\n")
+	
 	content.WriteString("**KripkeLib Operators** (real TLA+ operators, not comments):\n")
 	content.WriteString("- **snd(channel, msg)**: Send message to channel (process calculus: channel ! msg)\n")
 	content.WriteString("- **rcv(channel)**: Receive from channel (process calculus: channel ? msg)\n")
 	content.WriteString("- **can_send(channel, capacity)**: Check if channel can accept message\n")
 	content.WriteString("- **can_recv(channel)**: Check if channel has messages\n")
-	content.WriteString("- **choice(lower, upper, guard, action)**: Probabilistic choice where lower <= R < upper\n\n")
-	content.WriteString("**Key Elements**:\n")
-	content.WriteString("- **Variables**: producer_count, consumer_count, channel_buffer\n")
-	content.WriteString("- **Constants**: MaxMessages = 10, ChannelCapacity = 3\n")
-	content.WriteString("- **Actions**: Producer_Send (with guard count < 10), Consumer_Recv (with guard channel non-empty)\n")
-	content.WriteString("- **Primed Variables**: count' = count + 1 for state updates\n")
-	content.WriteString("- **Chance Nodes**: choice(0.0, 0.7, TRUE, action1) \\\\/ choice(0.7, 1.0, TRUE, action2)\n")
-	content.WriteString("  - R1, R2, etc are dice rolls on every scheduler attempt\n")
-	content.WriteString("  - Probability ranges alter which predicates activate\n")
-	content.WriteString("- **Safety**: TypeOK, bounds checking on counts and channel capacity\n")
-	content.WriteString("- **Liveness**: Eventually producer_count = MaxMessages\n\n")
-	content.WriteString("See KripkeLib.tla for operator definitions and ProducerConsumer.tla for a complete example.\n\n")
+	content.WriteString("- **choice(lower, upper, guard, action)**: Probabilistic choice where lower <= R < upper (0-100)\n\n")
+	content.WriteString("See KripkeLib.tla for complete operator definitions.\n\n")
 	
 	// Architecture Notes
 	content.WriteString("## Architecture Notes\n\n")
