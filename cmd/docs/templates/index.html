@@ -4,6 +4,15 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>kripke-ctl: LLM Workflow Demo</title>
+    <script src="https://cdn.jsdelivr.net/npm/marked@11.0.0/marked.min.js"></script>
+    <script type="module">
+        import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs';
+        mermaid.initialize({ 
+            startOnLoad: false,
+            theme: 'dark'
+        });
+        window.mermaid = mermaid;
+    </script>
     <style>
         * {
             margin: 0;
@@ -265,6 +274,71 @@
         .tab-content.active {
             display: block;
         }
+        
+        /* Markdown rendering styles */
+        #markdown-output {
+            line-height: 1.6;
+        }
+        
+        #markdown-output h1 {
+            color: #00ff88;
+            border-bottom: 2px solid #3a3a3a;
+            padding-bottom: 10px;
+            margin-bottom: 20px;
+        }
+        
+        #markdown-output h2 {
+            color: #00ccff;
+            margin-top: 30px;
+            margin-bottom: 15px;
+        }
+        
+        #markdown-output h3 {
+            color: #ffaa00;
+            margin-top: 20px;
+            margin-bottom: 10px;
+        }
+        
+        #markdown-output p {
+            margin-bottom: 15px;
+        }
+        
+        #markdown-output pre {
+            background: #0a0a0a;
+            padding: 15px;
+            border-radius: 4px;
+            overflow-x: auto;
+            border: 1px solid #3a3a3a;
+        }
+        
+        #markdown-output code {
+            background: #0a0a0a;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-family: 'Courier New', monospace;
+            font-size: 14px;
+            color: #00ff88;
+        }
+        
+        #markdown-output pre code {
+            background: transparent;
+            padding: 0;
+            color: #e0e0e0;
+        }
+        
+        /* Mermaid diagram styling */
+        .language-mermaid {
+            background: #2a2a2a !important;
+            padding: 20px !important;
+            border-radius: 8px !important;
+            border: 1px solid #3a3a3a !important;
+            margin: 20px 0 !important;
+        }
+        
+        .language-mermaid svg {
+            max-width: 100%;
+            height: auto;
+        }
     </style>
 </head>
 <body>
@@ -441,7 +515,9 @@ Be specific about:
                     
                     if (data.markdown) {
                         clearInterval(interval);
-                        document.getElementById('markdown-output').innerHTML = `<pre>${escapeHtml(data.markdown)}</pre>`;
+                        
+                        // Render markdown with mermaid support
+                        renderMarkdown(data.markdown, 'markdown-output');
                         
                         // Check if it's an error
                         if (data.markdown.startsWith('# Error')) {
@@ -495,7 +571,8 @@ Be specific about:
                 document.getElementById('go-output').innerHTML = `<pre>${escapeHtml(data.go_code)}</pre>`;
                 
                 if (data.markdown) {
-                    document.getElementById('markdown-output').innerHTML = `<pre>${escapeHtml(data.markdown)}</pre>`;
+                    // Render markdown with mermaid support
+                    renderMarkdown(data.markdown, 'markdown-output');
                 } else {
                     document.getElementById('markdown-output').innerHTML = '<p style="color: #888;">Execution in progress...</p>';
                     pollForOutput(projectId);
@@ -517,6 +594,25 @@ Be specific about:
             const div = document.createElement('div');
             div.textContent = text;
             return div.innerHTML;
+        }
+        
+        function renderMarkdown(markdown, targetElementId) {
+            const element = document.getElementById(targetElementId);
+            
+            // Render markdown to HTML
+            const markdownHtml = marked.parse(markdown);
+            element.innerHTML = markdownHtml;
+            
+            // Render mermaid diagrams after a short delay
+            setTimeout(() => {
+                const mermaidElements = element.querySelectorAll('.language-mermaid');
+                mermaidElements.forEach((mermaidEl, index) => {
+                    const code = mermaidEl.textContent;
+                    const id = `mermaid-${Date.now()}-${index}`;
+                    mermaidEl.innerHTML = `<div id="${id}">${code}</div>`;
+                    mermaid.run({ nodes: [document.getElementById(id)] });
+                });
+            }, 100);
         }
         
         // Load projects on page load
