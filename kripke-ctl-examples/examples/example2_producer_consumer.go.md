@@ -14,9 +14,9 @@ Producer-Consumer with bounded buffer (capacity = 2):
 STATE SPACE
 ------------------------------------------------------------------------------
 States (3 total):
-  B0: [empty, P-ready]
   B1: [P-ready, C-ready]
   B2: [full, C-ready]
+  B0: [empty, P-ready]
 
 CTL PROPERTIES
 ------------------------------------------------------------------------------
@@ -28,16 +28,18 @@ CTL PROPERTIES
 ✓ PASS P6: Buffer can become empty
 
 MERMAID DIAGRAM
-
-```mermaidtateDiagram-v2
+------------------------------------------------------------------------------
+stateDiagram-v2
     [*] --> B0
     
-    B2 --> B1: consume
     B0 --> B1: produce
     B1 --> B2: produce
     B1 --> B0: consume
+    B2 --> B1: consume
     
     B0: Empty (P:ready C:blocked)
     B1: Half (P:ready C:ready)
     B2: Full (P:blocked C:ready)
-```
+
+
+===============================================================================

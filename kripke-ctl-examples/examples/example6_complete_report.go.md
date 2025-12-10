@@ -3,7 +3,7 @@
    Messages: 9
    States in model: 3
    Properties verified: 6/6
-   Generation time: 191.463µs
+   Generation time: 238.31µs
 
 📊 Open the Markdown file to see:
    - Execution trace
