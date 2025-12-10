@@ -1,6 +1,6 @@
 # Producer-Consumer: Complete Analysis Report
 
-**Generated**: 2025-12-10 05:29:08
+**Generated**: 2025-12-10 05:45:02
 
 **Tool**: kripke-ctl (CTL model checker + actor engine)
 
@@ -85,9 +85,9 @@ sequenceDiagram
 
 ### States
 
-- **buffer_2**: [full, C:ready]
 - **buffer_0**: [empty, P:ready]
 - **buffer_1**: [P:ready, C:ready]
+- **buffer_2**: [full, C:ready]
 
 ### State Diagram
 
@@ -95,10 +95,10 @@ sequenceDiagram
 stateDiagram-v2
     [*] --> buffer_0
 
-    buffer_0 --> buffer_1: produce
     buffer_1 --> buffer_2: produce
     buffer_1 --> buffer_0: consume
     buffer_2 --> buffer_1: consume
+    buffer_0 --> buffer_1: produce
 
     buffer_0: Empty (P:ready C:blocked)
     buffer_1: Partial (P:ready C:ready)
@@ -131,5 +131,5 @@ stateDiagram-v2
 
 - Average queue delay: **1.67 ticks**
 - Messages processed: **9**
-- Execution time: **171.58µs**
+- Execution time: **142.225µs**
 

@@ -1,6 +1,6 @@
 # Producer-Consumer CTL Verification
 
-**Generated**: 2025-12-10 05:29:09  
+**Generated**: 2025-12-10 05:45:02  
 **Tool**: kripke-ctl
 
 ---
@@ -89,10 +89,10 @@ sequenceDiagram
 ```mermaid
 stateDiagram-v2
     [*] --> buffer_0
-    buffer_2 --> buffer_1: consume
     buffer_0 --> buffer_1: produce
     buffer_1 --> buffer_2: produce
     buffer_1 --> buffer_0: consume
+    buffer_2 --> buffer_1: consume
 
     buffer_0: Empty (P:ready C:blocked)
     buffer_1: Partial (P:ready C:ready)

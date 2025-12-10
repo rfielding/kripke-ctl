@@ -14,12 +14,12 @@ A client-server system with timeout:
 STATE SPACE
 ------------------------------------------------------------------------------
 States (6 total):
-  idle_idle_0
-  waiting_processing_0
   waiting_processing_1
   waiting_processing_2
   idle_idle_response
   idle_idle_timeout
+  idle_idle_0
+  waiting_processing_0
 
 CTL PROPERTIES
 ------------------------------------------------------------------------------
@@ -29,7 +29,8 @@ CTL PROPERTIES
 ✓ PASS P4: Never both response and timeout
 
 MERMAID DIAGRAM
-------------------------------------------------------------------------------
+
+```mermaid
 stateDiagram-v2
     [*] --> idle_idle_0
     
@@ -48,6 +49,5 @@ stateDiagram-v2
     waiting_processing_2: Wait / Timer=2
     idle_idle_response: Response Received
     idle_idle_timeout: Timeout!
+```
 
-
-===============================================================================
