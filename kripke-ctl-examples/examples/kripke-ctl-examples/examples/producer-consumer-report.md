@@ -64,7 +64,7 @@ stateDiagram-v2
 
 **Result**: ✅ PASS
 
-**Satisfying states**: buffer_0, buffer_1, buffer_2
+**Satisfying states**: buffer_1, buffer_2, buffer_0
 
 ### ✅ Liveness-Consumer: Consumer can always eventually receive
 
@@ -80,7 +80,7 @@ stateDiagram-v2
 
 **Result**: ✅ PASS
 
-**Satisfying states**: buffer_1, buffer_2, buffer_0
+**Satisfying states**: buffer_0, buffer_1, buffer_2
 
 ### ✅ Reachability-Full: Buffer can become full
 
@@ -88,7 +88,7 @@ stateDiagram-v2
 
 **Result**: ✅ PASS
 
-**Satisfying states**: buffer_0, buffer_2, buffer_1
+**Satisfying states**: buffer_2, buffer_1, buffer_0
 
 ### ✅ Reachability-Empty: Buffer can become empty
 
@@ -96,16 +96,16 @@ stateDiagram-v2
 
 **Result**: ✅ PASS
 
-**Satisfying states**: buffer_0, buffer_1, buffer_2
+**Satisfying states**: buffer_1, buffer_2, buffer_0
 
 ## Transition Graph
 
 ```mermaid
 graph LR
+    buffer_2 -->|consume| buffer_1
     buffer_0 -->|produce| buffer_1
     buffer_1 -->|produce| buffer_2
     buffer_1 -->|consume| buffer_0
-    buffer_2 -->|consume| buffer_1
 ```
 
 ## Conclusion
