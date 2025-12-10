@@ -86,9 +86,9 @@ func main() {
 
 	// State Diagram
 	report.WriteString("## State Diagram\n\n")
-	report.WriteString("```mermaid\n")
+	report.WriteString("```mermaid\n")  // Proper fence
 	report.WriteString(generateMermaid(g))
-	report.WriteString("```\n\n")
+	report.WriteString("```\n\n")  // Closing fence on its own line
 
 	// CTL Properties
 	report.WriteString("## CTL Properties Verification\n\n")

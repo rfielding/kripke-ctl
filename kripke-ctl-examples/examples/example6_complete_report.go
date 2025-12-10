@@ -33,7 +33,6 @@ func (p *Producer) Ready(w *kripke.World) []kripke.Step {
 
 	return []kripke.Step{
 		func(w *kripke.World) {
-			ch := w.ChannelByAddress(kripke.Address{ActorID: "consumer", ChannelName: "inbox"})
 			kripke.SendMessage(w, kripke.Message{
 				From:    kripke.Address{ActorID: "producer", ChannelName: "out"},
 				To:      kripke.Address{ActorID: "consumer", ChannelName: "inbox"},

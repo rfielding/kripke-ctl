@@ -1,23 +1,28 @@
-# Producer-Consumer CTL Verification
+# Producer-Consumer: Complete Analysis Report
 
-**Generated**: 2025-12-10 05:18:58  
-**Tool**: kripke-ctl
+**Generated**: 2025-12-10 05:18:58
+
+**Tool**: kripke-ctl (CTL model checker + actor engine)
 
 ---
 
-## System Description
+## 1. System Description
+
+### English Specification
 
 A producer-consumer system with bounded buffer:
 
-- **Producer**: Creates items and sends to buffer
-- **Consumer**: Receives items from buffer
-- **Buffer**: Capacity = 2, FIFO
+- **Producer**: Creates items and sends them to consumer's inbox
+- **Consumer**: Receives items from inbox and processes them
+- **Buffer**: FIFO channel with capacity = 2
 - **Blocking**: Producer waits when full, consumer waits when empty
 
-## Engine Execution
+## 2. Engine Execution
 
-| Step | Time | Action | Buffer | Events |
-|------|------|--------|--------|--------|
+Running actor engine for 20 steps...
+
+| Step | Time | Action | Buffer Size | Events |
+|------|------|--------|-------------|--------|
 | 1 | 1 | produce | 1 | 0 |
 | 2 | 2 | consume | 0 | 1 |
 | 3 | 3 | produce | 1 | 1 |
@@ -39,12 +44,12 @@ A producer-consumer system with bounded buffer:
 | 19 | 19 | produce | 1 | 9 |
 | 20 | 20 | produce | 2 | 9 |
 
-## Event Log
+## 3. Event Log Analysis
 
-- Total messages: **9**
-- Average queue delay: **1.67 ticks**
-- Maximum queue delay: **2 ticks**
-- Consumer processed: **9 items**
+**Total messages**: 9
+**Average queue delay**: 1.67 ticks
+**Maximum queue delay**: 2 ticks
+**Consumer processed**: 9 items
 
 ### Event Timeline
 
@@ -73,55 +78,58 @@ sequenceDiagram
     B->>C: recv (t=17, delay=1)
 ```
 
-## State Space
+## 4. State Space Model
 
-**States**: 3  
+**States**: 3
 **Transitions**: 4
 
 ### States
 
-- **buffer_0**: empty, P:ready
-- **buffer_1**: P:ready, C:ready
-- **buffer_2**: full, C:ready
+- **buffer_0**: [empty, P:ready]
+- **buffer_1**: [P:ready, C:ready]
+- **buffer_2**: [full, C:ready]
 
 ### State Diagram
 
 ```mermaid
 stateDiagram-v2
     [*] --> buffer_0
+
+    buffer_2 --> buffer_1: consume
     buffer_0 --> buffer_1: produce
     buffer_1 --> buffer_2: produce
     buffer_1 --> buffer_0: consume
-    buffer_2 --> buffer_1: consume
 
-    buffer_0: Empty (P:ready C:blocked)
-    buffer_1: Partial (P:ready C:ready)
-    buffer_2: Full (P:blocked C:ready)
+    buffer_0: Empty\nP:✓ C:✗
+    buffer_1: Partial\nP:✓ C:✓
+    buffer_2: Full\nP:✗ C:✓
 ```
 
-## CTL Verification
+## 5. CTL Property Verification
 
 | Property | Formula | Result | Description |
 |----------|---------|--------|-------------|
 | Safety | `AG(¬overflow)` | ✅ | Buffer never overflows |
 | Liveness-P | `AG(EF(producer_ready))` | ✅ | Producer can always eventually send |
 | Liveness-C | `AG(EF(consumer_ready))` | ✅ | Consumer can always eventually receive |
-| No-Deadlock | `AG(producer_ready ∨ consumer_ready)` | ✅ | System never deadlocks |
-| Reachable-Full | `EF(buffer_full)` | ✅ | Buffer can become full |
-| Reachable-Empty | `EF(buffer_empty)` | ✅ | Buffer can become empty |
+| No-Deadlock | `AG(P ∨ C)` | ✅ | At least one actor can always progress |
+| Reachable-Full | `EF(full)` | ✅ | Buffer can become full |
+| Reachable-Empty | `EF(empty)` | ✅ | Buffer can become empty |
 
-## Summary
+## 6. Conclusion
 
-**Verification**: 6/6 properties passed
+**Verification Summary**: 6/6 properties verified
 
 ### Key Findings
 
-1. ✅ **Safety**: Buffer never overflows
-2. ✅ **Liveness**: Both actors can always make progress
-3. ✅ **Deadlock-freedom**: System never gets stuck
-4. ✅ **Reachability**: All buffer states are reachable
+1. ✅ **Safety**: The buffer never overflows (capacity constraint respected)
+2. ✅ **Liveness**: Both producer and consumer can always make progress eventually
+3. ✅ **Deadlock-freedom**: The system never reaches a state where no progress is possible
+4. ✅ **Reachability**: All possible buffer states (empty, partial, full) are reachable
 
-### Metrics
+### Performance Metrics
 
 - Average queue delay: **1.67 ticks**
 - Messages processed: **9**
+- Execution time: **210.993µs**
+
