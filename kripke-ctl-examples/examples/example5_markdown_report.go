@@ -298,11 +298,11 @@ func generateMermaid(g *kripke.Graph) string {
 		desc := name
 		
 		if g.HasLabel(sid, "buffer_empty") {
-			desc = "Empty Buffer\\nP:ready C:blocked"
+			desc = "Empty Buffer (P:ready C:blocked)"
 		} else if g.HasLabel(sid, "buffer_full") {
-			desc = "Full Buffer\\nP:blocked C:ready"
+			desc = "Full Buffer (P:blocked C:ready)"
 		} else {
-			desc = "Partial Buffer\\nP:ready C:ready"
+			desc = "Partial Buffer (P:ready C:ready)"
 		}
 		
 		sb.WriteString(fmt.Sprintf("    %s: %s\n", name, desc))

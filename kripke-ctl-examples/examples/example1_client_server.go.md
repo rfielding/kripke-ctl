@@ -14,12 +14,12 @@ A client-server system with timeout:
 STATE SPACE
 ------------------------------------------------------------------------------
 States (6 total):
-  waiting_processing_2
-  idle_idle_response
-  idle_idle_timeout
   idle_idle_0
   waiting_processing_0
   waiting_processing_1
+  waiting_processing_2
+  idle_idle_response
+  idle_idle_timeout
 
 CTL PROPERTIES
 ------------------------------------------------------------------------------

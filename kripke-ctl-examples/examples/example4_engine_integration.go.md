@@ -39,14 +39,14 @@ PART 4: Mermaid State Diagram
 stateDiagram-v2
     [*] --> buffer_0
 
+    buffer_0 --> buffer_1: produce
     buffer_1 --> buffer_2: produce
     buffer_1 --> buffer_0: consume
     buffer_2 --> buffer_1: consume
-    buffer_0 --> buffer_1: produce
 
-    buffer_0: buffer_0\nP:✓ C:✗
-    buffer_1: buffer_1\nP:✓ C:✓
-    buffer_2: buffer_2\nP:✗ C:✓
+    buffer_1: buffer_1 (P:ready C:ready)
+    buffer_2: buffer_2 (P:blocked C:ready)
+    buffer_0: buffer_0 (P:ready C:blocked)
 
 
 PART 5: Event Log (Queue Delay Analysis)

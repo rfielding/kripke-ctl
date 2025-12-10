@@ -26,28 +26,27 @@ CTL PROPERTIES & VERIFICATION
 ✓ PASS P1: Client is always either idle or waiting
     States: waiting_processing_1, waiting_processing_2, idle_idle_response, idle_idle_timeout, idle_idle_0, waiting_processing_0
 ✓ PASS P2: It's possible to get a response
-    States: idle_idle_timeout, idle_idle_response, waiting_processing_1, waiting_processing_2, waiting_processing_0, idle_idle_0
+    States: idle_idle_timeout, idle_idle_response, waiting_processing_2, waiting_processing_1, waiting_processing_0, idle_idle_0
 ✓ PASS P3: It's possible to timeout
-    States: idle_idle_timeout, waiting_processing_2, waiting_processing_1, waiting_processing_0, idle_idle_0, idle_idle_response
+    States: waiting_processing_1, waiting_processing_0, idle_idle_0, idle_idle_response, idle_idle_timeout, waiting_processing_2
 ✓ PASS P4: Never both response and timeout
     States: idle_idle_0, waiting_processing_0, waiting_processing_1, waiting_processing_2, idle_idle_response, idle_idle_timeout
 ✗ FAIL P5: Eventually get response or timeout
     States: waiting_processing_0, waiting_processing_1, waiting_processing_2, idle_idle_response, idle_idle_timeout
 
 MERMAID DIAGRAM
-
-```mermaid
+------------------------------------------------------------------------------
 stateDiagram-v2
     [*] --> idle_idle_0
     
+    waiting_processing_1 --> waiting_processing_2
+    waiting_processing_1 --> idle_idle_response
     waiting_processing_2 --> idle_idle_response
     waiting_processing_2 --> idle_idle_timeout
     idle_idle_response --> idle_idle_0
     idle_idle_timeout --> idle_idle_0
     idle_idle_0 --> waiting_processing_0
     waiting_processing_0 --> waiting_processing_1
-    waiting_processing_1 --> waiting_processing_2
-    waiting_processing_1 --> idle_idle_response
     
     idle_idle_0: Idle / Ready
     waiting_processing_0: Sent / Timer=0
@@ -56,5 +55,5 @@ stateDiagram-v2
     idle_idle_response: Response Received
     idle_idle_timeout: Timeout!
 
-```
 
+===============================================================================

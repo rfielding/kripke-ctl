@@ -292,16 +292,16 @@ func generateMermaid(g *kripke.Graph) string {
 	// State labels
 	for _, sid := range g.States() {
 		name := g.NameOf(sid)
-		pReady := "✓" 
-		cReady := "✓"
+		pReady := "ready" 
+		cReady := "ready"
 		if !g.HasLabel(sid, "producer_ready") {
-			pReady = "✗"
+			pReady = "blocked"
 		}
 		if !g.HasLabel(sid, "consumer_ready") {
-			cReady = "✗"
+			cReady = "blocked"
 		}
 		
-		sb.WriteString(fmt.Sprintf("    %s: %s\\nP:%s C:%s\n", name, name, pReady, cReady))
+		sb.WriteString(fmt.Sprintf("    %s: %s (P:%s C:%s)\n", name, name, pReady, cReady))
 	}
 
 	return sb.String()

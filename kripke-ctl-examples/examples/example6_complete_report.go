@@ -383,11 +383,11 @@ func generateStateDiagram(g *kripke.Graph) string {
 		desc := name
 		
 		if g.HasLabel(sid, "buffer_empty") {
-			desc = "Empty\\nP:✓ C:✗"
+			desc = "Empty (P:ready C:blocked)"
 		} else if g.HasLabel(sid, "buffer_full") {
-			desc = "Full\\nP:✗ C:✓"
+			desc = "Full (P:blocked C:ready)"
 		} else {
-			desc = "Partial\\nP:✓ C:✓"
+			desc = "Partial (P:ready C:ready)"
 		}
 		
 		sb.WriteString(fmt.Sprintf("    %s: %s\n", name, desc))
