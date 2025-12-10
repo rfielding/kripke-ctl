@@ -35,7 +35,8 @@ CTL PROPERTIES & VERIFICATION
     States: waiting_processing_0, waiting_processing_1, waiting_processing_2, idle_idle_response, idle_idle_timeout
 
 MERMAID DIAGRAM
-------------------------------------------------------------------------------
+
+```mermaid
 stateDiagram-v2
     [*] --> idle_idle_0
     
@@ -55,5 +56,5 @@ stateDiagram-v2
     idle_idle_response: Response Received
     idle_idle_timeout: Timeout!
 
+```
 
-===============================================================================
