@@ -205,6 +205,30 @@ import (
 	"github.com/rfielding/kripke-ctl/kripke"
 )
 
+// ============================================================================
+// KRIPKE ARCHITECTURE
+// ============================================================================
+//
+// Each Process represents ONE state/transition:
+//   - Ready() checks ONE predicate (guard)
+//   - Returns ONE step (or nil if predicate doesn't match)
+//
+// CANDIDATE = guard matches AND not blocked
+//   - Guard: your application logic (e.g., count < 10)
+//   - Not blocked: engine checks channels (send to full / recv from empty)
+//
+// Multiple states/transitions = multiple Process objects
+//   Example: If x=5 and you have predicates "x>0" and "x<20",
+//   both match, so BOTH are candidates. Engine picks one at random.
+//
+// Step execution can:
+//   - Update variables: x' = x + 1
+//   - Send message: snd(ch, msg)
+//   - Receive message: val' = rcv(ch)
+//   - Reference pre-rolled dice for probabilistic choice
+//
+// ============================================================================
+
 type Producer struct {
 	IDstr string
 	Count int
@@ -213,20 +237,26 @@ type Producer struct {
 func (p *Producer) ID() string { return p.IDstr }
 
 func (p *Producer) Ready(w *kripke.World) []kripke.Step {
-	// Guard: only send if haven't sent 10 yet
+	// ARCHITECTURE: Ready() checks ONE predicate and returns ONE step (or nil)
+	// This Process represents the "can send" transition
+	
+	// Guard 1: Application logic
 	if p.Count >= 10 {
-		return nil
+		return nil  // Predicate doesn't match
 	}
 	
-	// Don't check CanSend - engine handles blocking!
-	// Just define the step - engine checks if channel blocks
+	// Guard 2: Get channel (engine will check if blocked)
 	ch := w.ChannelByAddress(kripke.Address{ActorID: "consumer", ChannelName: "inbox"})
 	if ch == nil {
 		return nil
 	}
 	
+	// Predicate matches - return ONE step
+	// If channel would block, engine marks this as unschedulable
+	// CANDIDATE = guard matches AND not blocked
 	return []kripke.Step{
 		func(w *kripke.World) {
+			// The action for this transition
 			kripke.SendMessage(w, kripke.Message{
 				From: kripke.Address{ActorID: p.IDstr, ChannelName: "out"},
 				To: kripke.Address{ActorID: "consumer", ChannelName: "inbox"},
@@ -246,10 +276,17 @@ type Consumer struct {
 func (c *Consumer) ID() string { return c.IDstr }
 
 func (c *Consumer) Ready(w *kripke.World) []kripke.Step {
-	// Don't check CanRecv - engine handles blocking!
-	// Just return the receive step
+	// ARCHITECTURE: Ready() checks ONE predicate and returns ONE step (or nil)
+	// This Process represents the "can receive" transition
+	
+	// No application guard - always willing to receive
+	// Engine will check if channel is empty (would block)
+	
+	// Return ONE step
+	// CANDIDATE = (always ready) AND not blocked
 	return []kripke.Step{
 		func(w *kripke.World) {
+			// The action for this transition
 			kripke.RecvAndLog(w, c.Inbox)
 			c.Count++
 		},
