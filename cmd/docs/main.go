@@ -190,10 +190,8 @@ func handleGenerate(w http.ResponseWriter, r *http.Request) {
 }
 
 func generateGoModel(english, projectID string) (string, error) {
-	// Template using correct kripke architecture:
-	// - Engine checks blocking automatically
-	// - Actors just return steps with guards
-	// - Engine picks one ready step uniformly at random
+	// Template using the BAKERY example - the canonical real-world use case
+	// This shows why kripke-ctl exists: to model business systems and track metrics
 	
 	template := `package main
 
@@ -202,39 +200,338 @@ import (
 	"os"
 	"strings"
 	"time"
+	"math/rand"
 	"github.com/rfielding/kripke-ctl/kripke"
 )
 
 // ============================================================================
-// KRIPKE ARCHITECTURE
+// BAKERY BUSINESS SIMULATION - THE CANONICAL EXAMPLE
 // ============================================================================
 //
-// Each Process represents ONE state/transition:
-//   - Ready() checks ONE predicate (guard)
-//   - Returns ONE step (or nil if predicate doesn't match)
+// Real-world system: Model a bakery's operations to answer business questions
 //
-// CANDIDATE = guard matches AND not blocked
-//   - Guard: your application logic (e.g., count < 10)
-//   - Not blocked: engine checks channels (send to full / recv from empty)
+// Actors:
+//   Production: Makes bread (dough → kneading → baking → cooling)
+//   Truck: Transports bread (loading → driving → unloading)
+//   Storefront: Manages inventory and sales
+//   Customers: Arrive and purchase bread
 //
-// Multiple states/transitions = multiple Process objects
-//   Example: If x=5 and you have predicates "x>0" and "x<20",
-//   both match, so BOTH are candidates. Engine picks one at random.
+// Business Questions:
+//   1. What are our profits?
+//   2. How much waste do we have?
+//   3. What are the most popular breads?
 //
-// Step execution can:
-//   - Update variables: x' = x + 1
-//   - Send message: snd(ch, msg)
-//   - Receive message: val' = rcv(ch)
-//   - Reference pre-rolled dice for probabilistic choice
+// Metrics tracked over time:
+//   - Revenue (cumulative and per timestep)
+//   - Costs (cumulative and per timestep)
+//   - Profit (revenue - costs over time)
+//   - Inventory levels
+//   - Sales by bread type
 //
 // ============================================================================
 
-type Producer struct {
-	IDstr string
-	Count int
+// Metrics tracking for time-series analysis
+type Metrics struct {
+	Timestep        int
+	Revenue         []float64  // Revenue at each timestep
+	Costs           []float64  // Costs at each timestep
+	Profit          []float64  // Profit at each timestep
+	TotalRevenue    float64
+	TotalCosts      float64
+	ProductionCount int
+	SalesCount      int
+	Inventory       int
 }
 
-func (p *Producer) ID() string { return p.IDstr }
+func (m *Metrics) RecordTimestep(revenue, costs float64, inventory int) {
+	m.Timestep++
+	m.TotalRevenue += revenue
+	m.TotalCosts += costs
+	m.Revenue = append(m.Revenue, m.TotalRevenue)
+	m.Costs = append(m.Costs, m.TotalCosts)
+	m.Profit = append(m.Profit, m.TotalRevenue - m.TotalCosts)
+	m.Inventory = inventory
+}
+
+var globalMetrics = &Metrics{
+	Revenue: []float64{0},
+	Costs:   []float64{0},
+	Profit:  []float64{0},
+}
+
+// ============================================================================
+// PRODUCTION ACTOR
+// ============================================================================
+
+type Production struct {
+	IDstr      string
+	State      string
+	BreadType  string
+	TimeInState int
+	TotalMade  int
+	HourlyRate float64
+}
+
+func (p *Production) ID() string { return p.IDstr }
+
+type ProductionStart struct {
+	IDstr string
+	Prod  *Production
+}
+
+func (ps *ProductionStart) ID() string { return ps.IDstr }
+
+func (ps *ProductionStart) Ready(w *kripke.World) []kripke.Step {
+	if ps.Prod.State != "idle" {
+		return nil
+	}
+	return []kripke.Step{
+		func(w *kripke.World) {
+			dice := rand.Intn(100)
+			if dice < 50 {
+				ps.Prod.BreadType = "sourdough"
+			} else if dice < 80 {
+				ps.Prod.BreadType = "baguette"
+			} else {
+				ps.Prod.BreadType = "rye"
+			}
+			ps.Prod.State = "dough"
+			ps.Prod.TimeInState = 0
+		},
+	}
+}
+
+type ProductionProgress struct {
+	IDstr string
+	Prod  *Production
+}
+
+func (pp *ProductionProgress) ID() string { return pp.IDstr }
+
+func (pp *ProductionProgress) Ready(w *kripke.World) []kripke.Step {
+	if pp.Prod.State != "dough" && pp.Prod.State != "kneading" && 
+	   pp.Prod.State != "baking" && pp.Prod.State != "cooling" {
+		return nil
+	}
+	return []kripke.Step{
+		func(w *kripke.World) {
+			pp.Prod.TimeInState++
+			switch pp.Prod.State {
+			case "dough":
+				if pp.Prod.TimeInState >= 2 {
+					pp.Prod.State = "kneading"
+					pp.Prod.TimeInState = 0
+				}
+			case "kneading":
+				if pp.Prod.TimeInState >= 2 {
+					pp.Prod.State = "baking"
+					pp.Prod.TimeInState = 0
+				}
+			case "baking":
+				if pp.Prod.TimeInState >= 3 {
+					pp.Prod.State = "cooling"
+					pp.Prod.TimeInState = 0
+				}
+			case "cooling":
+				if pp.Prod.TimeInState >= 2 {
+					pp.Prod.State = "ready"
+					pp.Prod.TimeInState = 0
+				}
+			}
+		},
+	}
+}
+
+type ProductionLoad struct {
+	IDstr   string
+	Prod    *Production
+	ToTruck *kripke.Channel
+}
+
+func (pl *ProductionLoad) ID() string { return pl.IDstr }
+
+func (pl *ProductionLoad) Ready(w *kripke.World) []kripke.Step {
+	if pl.Prod.State != "ready" {
+		return nil
+	}
+	return []kripke.Step{
+		func(w *kripke.World) {
+			kripke.SendMessage(w, kripke.Message{
+				From:    kripke.Address{ActorID: pl.Prod.IDstr, ChannelName: "out"},
+				To:      kripke.Address{ActorID: "storefront", ChannelName: "delivery"},
+				Payload: pl.Prod.BreadType,
+			})
+			pl.Prod.TotalMade++
+			pl.Prod.State = "idle"
+			globalMetrics.ProductionCount++
+		},
+	}
+}
+
+// ============================================================================
+// STOREFRONT ACTOR
+// ============================================================================
+
+type Storefront struct {
+	IDstr      string
+	Inventory  map[string]int
+	SalesCount map[string]int
+	Revenue    float64
+	Delivery   *kripke.Channel
+	SalesChan  *kripke.Channel
+	BreadPrice float64
+}
+
+func (s *Storefront) ID() string { return s.IDstr }
+
+type StorefrontReceive struct {
+	IDstr string
+	Store *Storefront
+}
+
+func (sr *StorefrontReceive) ID() string { return sr.IDstr }
+
+func (sr *StorefrontReceive) Ready(w *kripke.World) []kripke.Step {
+	return []kripke.Step{
+		func(w *kripke.World) {
+			msg := kripke.RecvAndLog(w, sr.Store.Delivery)
+			if breadType, ok := msg.Payload.(string); ok {
+				sr.Store.Inventory[breadType]++
+			}
+		},
+	}
+}
+
+type StorefrontSale struct {
+	IDstr string
+	Store *Storefront
+}
+
+func (ss *StorefrontSale) ID() string { return ss.IDstr }
+
+func (ss *StorefrontSale) Ready(w *kripke.World) []kripke.Step {
+	return []kripke.Step{
+		func(w *kripke.World) {
+			msg := kripke.RecvAndLog(w, ss.Store.SalesChan)
+			if breadType, ok := msg.Payload.(string); ok {
+				if ss.Store.Inventory[breadType] > 0 {
+					ss.Store.Inventory[breadType]--
+					ss.Store.SalesCount[breadType]++
+					ss.Store.Revenue += ss.Store.BreadPrice
+					globalMetrics.SalesCount++
+				}
+			}
+		},
+	}
+}
+
+// ============================================================================
+// CUSTOMER ARRIVALS
+// ============================================================================
+
+type Customer struct {
+	IDstr       string
+	ToStore     *kripke.Channel
+	ArrivalRate int
+	Counter     int
+}
+
+func (c *Customer) ID() string { return c.IDstr }
+
+func (c *Customer) Ready(w *kripke.World) []kripke.Step {
+	c.Counter++
+	if c.Counter < c.ArrivalRate {
+		return nil
+	}
+	return []kripke.Step{
+		func(w *kripke.World) {
+			dice := rand.Intn(100)
+			var choice string
+			if dice < 50 {
+				choice = "sourdough"
+			} else if dice < 80 {
+				choice = "baguette"
+			} else {
+				choice = "rye"
+			}
+			kripke.SendMessage(w, kripke.Message{
+				From:    kripke.Address{ActorID: c.IDstr, ChannelName: "out"},
+				To:      kripke.Address{ActorID: "storefront", ChannelName: "sales"},
+				Payload: choice,
+			})
+			c.Counter = 0
+		},
+	}
+}
+
+func main() {
+	rand.Seed(42)
+	
+	// Channels
+	delivery := kripke.NewChannel("storefront", "delivery", 10)
+	sales := kripke.NewChannel("storefront", "sales", 10)
+	
+	// Actors
+	production := &Production{
+		IDstr:      "production",
+		State:      "idle",
+		HourlyRate: 25.0,
+	}
+	
+	storefront := &Storefront{
+		IDstr:      "storefront",
+		Inventory:  map[string]int{},
+		SalesCount: map[string]int{},
+		Delivery:   delivery,
+		SalesChan:  sales,
+		BreadPrice: 8.50,
+	}
+	
+	customer := &Customer{
+		IDstr:       "customer",
+		ToStore:     sales,
+		ArrivalRate: 3,
+	}
+	
+	// Processes
+	processes := []kripke.Process{
+		&ProductionStart{IDstr: "prod_start", Prod: production},
+		&ProductionProgress{IDstr: "prod_progress", Prod: production},
+		&ProductionLoad{IDstr: "prod_load", Prod: production, ToTruck: delivery},
+		&StorefrontReceive{IDstr: "store_receive", Store: storefront},
+		&StorefrontSale{IDstr: "store_sale", Store: storefront},
+		customer,
+	}
+	
+	w := kripke.NewWorld(
+		processes,
+		[]*kripke.Channel{delivery, sales},
+		42,
+	)
+	
+	// Run simulation and track metrics
+	maxSteps := 100
+	stepCount := 0
+	costPerStep := (production.HourlyRate + 20.0) / 60.0 / 60.0  // Two workers, per second
+	
+	for w.StepRandom() {
+		stepCount++
+		if stepCount >= maxSteps {
+			break
+		}
+		
+		// Record metrics every step
+		totalInventory := storefront.Inventory["sourdough"] + 
+			storefront.Inventory["baguette"] + 
+			storefront.Inventory["rye"]
+		globalMetrics.RecordTimestep(
+			storefront.Revenue - globalMetrics.TotalRevenue,  // Revenue this step
+			costPerStep,                                       // Cost this step
+			totalInventory,
+		)
+	}
+	
+	fmt.Printf("Simulation completed in %d steps\n", stepCount)
 
 func (p *Producer) Ready(w *kripke.World) []kripke.Step {
 	// ARCHITECTURE: Ready() checks ONE predicate and returns ONE step (or nil)
@@ -375,18 +672,18 @@ func main() {
 	content.WriteString("` + "`" + "`" + "`" + `mermaid\n")
 	content.WriteString("stateDiagram-v2\n")
 	content.WriteString("    [*] --> Sending\n")
-	content.WriteString("    Sending --> Sending: Count < 10 / Send Message\n")
-	content.WriteString("    Sending --> Done: Count >= 10\n")
+	content.WriteString("    Sending --> Sending: count < 10\n")
+	content.WriteString("    Sending --> Done: count >= 10\n")
 	content.WriteString("    Done --> [*]\n")
 	content.WriteString("` + "`" + "`" + "`" + `\n\n")
 	
 	content.WriteString("### Consumer State Machine\n\n")
 	content.WriteString("` + "`" + "`" + "`" + `mermaid\n")
 	content.WriteString("stateDiagram-v2\n")
-	content.WriteString("    [*] --> Ready\n")
-	content.WriteString("    Ready --> Receiving: Channel not empty\n")
-	content.WriteString("    Receiving --> Ready: Process Message\n")
-	content.WriteString("    Ready --> [*]: Producer done & Channel empty\n")
+	content.WriteString("    [*] --> Waiting\n")
+	content.WriteString("    Waiting --> Processing: message available\n")
+	content.WriteString("    Processing --> Waiting: message processed\n")
+	content.WriteString("    Waiting --> [*]\n")
 	content.WriteString("` + "`" + "`" + "`" + `\n\n")
 	
 	// Interaction Diagram
