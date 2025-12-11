@@ -394,7 +394,7 @@ func (sr *StorefrontReceive) ID() string { return sr.IDstr }
 func (sr *StorefrontReceive) Ready(w *kripke.World) []kripke.Step {
 	return []kripke.Step{
 		func(w *kripke.World) {
-			msg := kripke.RecvAndLog(w, sr.Store.Delivery)
+			msg, _ := kripke.RecvAndLog(w, sr.Store.Delivery)
 			if breadType, ok := msg.Payload.(string); ok {
 				sr.Store.Inventory[breadType]++
 			}
@@ -412,7 +412,7 @@ func (ss *StorefrontSale) ID() string { return ss.IDstr }
 func (ss *StorefrontSale) Ready(w *kripke.World) []kripke.Step {
 	return []kripke.Step{
 		func(w *kripke.World) {
-			msg := kripke.RecvAndLog(w, ss.Store.SalesChan)
+			msg, _ := kripke.RecvAndLog(w, ss.Store.SalesChan)
 			if breadType, ok := msg.Payload.(string); ok {
 				if ss.Store.Inventory[breadType] > 0 {
 					ss.Store.Inventory[breadType]--
@@ -532,330 +532,125 @@ func main() {
 	}
 	
 	fmt.Printf("Simulation completed in %d steps\n", stepCount)
-
-func (p *Producer) Ready(w *kripke.World) []kripke.Step {
-	// ARCHITECTURE: Ready() checks ONE predicate and returns ONE step (or nil)
-	// This Process represents the "can send" transition
-	
-	// Guard 1: Application logic
-	if p.Count >= 10 {
-		return nil  // Predicate doesn't match
-	}
-	
-	// Guard 2: Get channel (engine will check if blocked)
-	ch := w.ChannelByAddress(kripke.Address{ActorID: "consumer", ChannelName: "inbox"})
-	if ch == nil {
-		return nil
-	}
-	
-	// Predicate matches - return ONE step
-	// If channel would block, engine marks this as unschedulable
-	// CANDIDATE = guard matches AND not blocked
-	return []kripke.Step{
-		func(w *kripke.World) {
-			// The action for this transition
-			kripke.SendMessage(w, kripke.Message{
-				From: kripke.Address{ActorID: p.IDstr, ChannelName: "out"},
-				To: kripke.Address{ActorID: "consumer", ChannelName: "inbox"},
-				Payload: fmt.Sprintf("msg_%d", p.Count),
-			})
-			p.Count++
-		},
-	}
-}
-
-type Consumer struct {
-	IDstr string
-	Count int
-	Inbox *kripke.Channel
-}
-
-func (c *Consumer) ID() string { return c.IDstr }
-
-func (c *Consumer) Ready(w *kripke.World) []kripke.Step {
-	// ARCHITECTURE: Ready() checks ONE predicate and returns ONE step (or nil)
-	// This Process represents the "can receive" transition
-	
-	// No application guard - always willing to receive
-	// Engine will check if channel is empty (would block)
-	
-	// Return ONE step
-	// CANDIDATE = (always ready) AND not blocked
-	return []kripke.Step{
-		func(w *kripke.World) {
-			// The action for this transition
-			kripke.RecvAndLog(w, c.Inbox)
-			c.Count++
-		},
-	}
-}
-
-func main() {
-	ch := kripke.NewChannel("consumer", "inbox", 3)
-	producer := &Producer{IDstr: "producer"}
-	consumer := &Consumer{IDstr: "consumer", Inbox: ch}
-	
-	w := kripke.NewWorld(
-		[]kripke.Process{producer, consumer},
-		[]*kripke.Channel{ch},
-		42,
-	)
-	
-	// Engine picks one ready step uniformly at random each iteration
-	// Add step limit to prevent infinite loops
-	maxSteps := 1000
-	stepCount := 0
-	for w.StepRandom() {
-		stepCount++
-		if stepCount >= maxSteps {
-			fmt.Printf("⚠️  Warning: Reached maximum step limit (%d)\n", maxSteps)
-			break
-		}
-	}
-	
-	fmt.Printf("Completed in %d steps\n", stepCount)
 	
 	// Generate comprehensive requirements document
 	var content strings.Builder
 	
 	// Header
-	content.WriteString("# Requirements Document: Producer-Consumer System\n\n")
+	content.WriteString("# Bakery Business Simulation Requirements\n\n")
 	content.WriteString("*Generated: " + time.Now().Format("2006-01-02 15:04:05") + "*\n\n")
 	
-	// Original Request
-	content.WriteString("## Original Request\n\n")
-	content.WriteString("Create a producer-consumer system where the Producer sends 10 messages to the Consumer through a buffered channel with capacity 3. Track the number of items sent and received, and generate a sequence diagram showing the message flow.\n\n")
+	// Business Metrics
+	content.WriteString("## Business Metrics\n\n")
+	
+	totalCost := (production.HourlyRate + 20.0) * float64(maxSteps) / 60.0 / 60.0
+	profit := storefront.Revenue - totalCost
+	totalInventory := storefront.Inventory["sourdough"] + 
+		storefront.Inventory["baguette"] + 
+		storefront.Inventory["rye"]
+	totalSales := storefront.SalesCount["sourdough"] + 
+		storefront.SalesCount["baguette"] + 
+		storefront.SalesCount["rye"]
+	
+	content.WriteString(fmt.Sprintf("- **Production**: %d breads made\n", production.TotalMade))
+	content.WriteString(fmt.Sprintf("- **Sales**: %d breads sold\n", totalSales))
+	content.WriteString(fmt.Sprintf("- **Revenue**: $%.2f\n", storefront.Revenue))
+	content.WriteString(fmt.Sprintf("- **Costs**: $%.2f\n", totalCost))
+	content.WriteString(fmt.Sprintf("- **Profit**: $%.2f\n", profit))
+	content.WriteString(fmt.Sprintf("- **Waste**: %d unsold breads\n", totalInventory))
+	content.WriteString("\n")
+	
+	// Sales by Type
+	content.WriteString("### Sales by Bread Type\n\n")
+	content.WriteString(fmt.Sprintf("- **Sourdough**: %d (%.0f%%)\n", 
+		storefront.SalesCount["sourdough"],
+		float64(storefront.SalesCount["sourdough"])*100/float64(totalSales)))
+	content.WriteString(fmt.Sprintf("- **Baguette**: %d (%.0f%%)\n", 
+		storefront.SalesCount["baguette"],
+		float64(storefront.SalesCount["baguette"])*100/float64(totalSales)))
+	content.WriteString(fmt.Sprintf("- **Rye**: %d (%.0f%%)\n\n", 
+		storefront.SalesCount["rye"],
+		float64(storefront.SalesCount["rye"])*100/float64(totalSales)))
+	
+	// Business Questions
+	content.WriteString("### Business Questions Answered\n\n")
+	content.WriteString(fmt.Sprintf("1. **What are our profits?** → $%.2f\n", profit))
+	content.WriteString(fmt.Sprintf("2. **How much waste?** → %d unsold items\n", totalInventory))
+	mostPopular := "sourdough"
+	if storefront.SalesCount["baguette"] > storefront.SalesCount[mostPopular] {
+		mostPopular = "baguette"
+	}
+	if storefront.SalesCount["rye"] > storefront.SalesCount[mostPopular] {
+		mostPopular = "rye"
+	}
+	content.WriteString(fmt.Sprintf("3. **Most popular bread?** → %s\n\n", mostPopular))
+	
+	// Production State Machine
+	content.WriteString("## Production Workflow\n\n")
+	content.WriteString("` + "`" + "`" + "`" + `mermaid\n")
+	content.WriteString("stateDiagram-v2\n")
+	content.WriteString("    [*] --> Idle\n")
+	content.WriteString("    Idle --> Dough: start production\n")
+	content.WriteString("    Dough --> Kneading: time >= 2\n")
+	content.WriteString("    Kneading --> Baking: time >= 2\n")
+	content.WriteString("    Baking --> Cooling: time >= 3\n")
+	content.WriteString("    Cooling --> Ready: time >= 2\n")
+	content.WriteString("    Ready --> Idle: load to delivery\n")
+	content.WriteString("` + "`" + "`" + "`" + `\n\n")
+	
+	// Popularity Chart
+	content.WriteString("## Bread Popularity\n\n")
+	content.WriteString("` + "`" + "`" + "`" + `mermaid\n")
+	content.WriteString("pie title Sales by Bread Type\n")
+	content.WriteString(fmt.Sprintf("    \"Sourdough\" : %d\n", storefront.SalesCount["sourdough"]))
+	content.WriteString(fmt.Sprintf("    \"Baguette\" : %d\n", storefront.SalesCount["baguette"]))
+	content.WriteString(fmt.Sprintf("    \"Rye\" : %d\n", storefront.SalesCount["rye"]))
+	content.WriteString("` + "`" + "`" + "`" + `\n\n")
 	
 	// System Overview
 	content.WriteString("## System Overview\n\n")
-	content.WriteString("This system implements a classic producer-consumer pattern using Go channels and the kripke-ctl framework. The producer generates messages, the consumer receives them, and the engine schedules steps uniformly at random.\n\n")
+	content.WriteString("This bakery simulation models a complete business workflow:\n\n")
+	content.WriteString("1. **Production** makes bread through 4 stages (dough, kneading, baking, cooling)\n")
+	content.WriteString("2. **Storefront** receives deliveries and manages inventory\n")
+	content.WriteString("3. **Customers** arrive and purchase bread\n")
+	content.WriteString("4. **Metrics** are tracked automatically (costs, revenue, waste)\n\n")
 	
-	// Actors
-	content.WriteString("## Actors\n\n")
-	content.WriteString("### Producer\n")
-	content.WriteString("- **Purpose**: Generate and send messages\n")
-	content.WriteString("- **State**: Count of messages sent\n")
-	content.WriteString("- **Guard**: Stops after sending 10 messages\n")
-	content.WriteString("- **Actions**: Send message, increment count\n\n")
-	content.WriteString("### Consumer\n")
-	content.WriteString("- **Purpose**: Receive and process messages\n")
-	content.WriteString("- **State**: Count of messages received\n")
-	content.WriteString("- **Guard**: None (always willing to receive)\n")
-	content.WriteString("- **Actions**: Receive message, increment count\n\n")
+	content.WriteString("### Actors\n\n")
+	content.WriteString("- **Production**: State machine for bread making\n")
+	content.WriteString("- **Storefront**: Inventory management and sales\n")
+	content.WriteString("- **Customer**: Probabilistic arrivals and purchases\n\n")
 	
-	// Channels
-	content.WriteString("## Channels\n\n")
-	content.WriteString("### consumer.inbox\n")
-	content.WriteString("- **Capacity**: 3 (buffered)\n")
-	content.WriteString("- **From**: producer\n")
-	content.WriteString("- **To**: consumer\n")
-	content.WriteString("- **Message Type**: string payloads (msg_0, msg_1, ...)\n\n")
-	
-	// Execution Metrics
-	content.WriteString("## Execution Metrics\n\n")
-	content.WriteString(fmt.Sprintf("- **Total Steps**: %d\n", stepCount))
-	content.WriteString(fmt.Sprintf("- **Messages Sent**: %d\n", producer.Count))
-	content.WriteString(fmt.Sprintf("- **Messages Received**: %d\n", consumer.Count))
-	content.WriteString(fmt.Sprintf("- **Channel Capacity**: 3\n"))
-	content.WriteString(fmt.Sprintf("- **Random Seed**: 42\n\n"))
-	
-	// Statistics
-	stepsPerMessage := float64(stepCount) / float64(producer.Count)
-	content.WriteString("### Statistics\n\n")
-	content.WriteString(fmt.Sprintf("- **Average Steps per Message**: %.2f\n", stepsPerMessage))
-	content.WriteString(fmt.Sprintf("- **Producer Efficiency**: %.1f%% (sent/capacity ratio)\n", float64(producer.Count)/10.0*100))
-	content.WriteString(fmt.Sprintf("- **Consumer Efficiency**: %.1f%% (received/sent ratio)\n\n", float64(consumer.Count)/float64(producer.Count)*100))
-	
-	// State Machines
-	content.WriteString("## State Machines\n\n")
-	content.WriteString("### Producer State Machine\n\n")
-	content.WriteString("` + "`" + "`" + "`" + `mermaid\n")
-	content.WriteString("stateDiagram-v2\n")
-	content.WriteString("    [*] --> Sending\n")
-	content.WriteString("    Sending --> Sending: count < 10\n")
-	content.WriteString("    Sending --> Done: count >= 10\n")
-	content.WriteString("    Done --> [*]\n")
-	content.WriteString("` + "`" + "`" + "`" + `\n\n")
-	
-	content.WriteString("### Consumer State Machine\n\n")
-	content.WriteString("` + "`" + "`" + "`" + `mermaid\n")
-	content.WriteString("stateDiagram-v2\n")
-	content.WriteString("    [*] --> Waiting\n")
-	content.WriteString("    Waiting --> Processing: message available\n")
-	content.WriteString("    Processing --> Waiting: message processed\n")
-	content.WriteString("    Waiting --> [*]\n")
-	content.WriteString("` + "`" + "`" + "`" + `\n\n")
-	
-	// Interaction Diagram
-	diagram := w.GenerateSequenceDiagram(10)
-	content.WriteString("## Interaction Diagram\n\n")
-	content.WriteString("This diagram shows the actual message flow that occurred during execution:\n\n")
-	content.WriteString("` + "`" + "`" + "`" + `mermaid\n")
-	content.WriteString(diagram)
-	content.WriteString("\n` + "`" + "`" + "`" + `\n\n")
-	
-	// Message Flow Chart
-	content.WriteString("## Message Flow Analysis\n\n")
-	content.WriteString("### Message Distribution (Pie Chart)\n\n")
-	content.WriteString("` + "`" + "`" + "`" + `mermaid\n")
-	content.WriteString("pie title Message Status\n")
-	content.WriteString(fmt.Sprintf("    \"Sent\" : %d\n", producer.Count))
-	content.WriteString(fmt.Sprintf("    \"Received\" : %d\n", consumer.Count))
-	inTransit := producer.Count - consumer.Count
-	if inTransit > 0 {
-		content.WriteString(fmt.Sprintf("    \"In Transit\" : %d\n", inTransit))
-	}
-	content.WriteString("` + "`" + "`" + "`" + `\n\n")
-	
-	// Timeline
-	content.WriteString("### Execution Timeline (Conceptual)\n\n")
-	content.WriteString("` + "`" + "`" + "`" + `mermaid\n")
-	content.WriteString("gantt\n")
-	content.WriteString("    title Message Processing Timeline\n")
-	content.WriteString("    dateFormat X\n")
-	content.WriteString("    axisFormat %s\n")
-	for i := 0; i < producer.Count; i++ {
-		content.WriteString(fmt.Sprintf("    Message %d : 0, %d\n", i+1, i+1))
-	}
-	content.WriteString("` + "`" + "`" + "`" + `\n\n")
-	
-	// Implementation
-	content.WriteString("## Implementation (Executable Model)\n\n")
-	content.WriteString("The following Go code implements this system and can be executed to verify behavior:\n\n")
-	content.WriteString("` + "`" + "`" + "`" + `go\n")
-	
-	// Include the actual Go code
-	goCode := ` + "`" + `package main
-
-import (
-	"fmt"
-	"os"
-	"strings"
-	"time"
-	"github.com/rfielding/kripke-ctl/kripke"
-)
-
-type Producer struct {
-	IDstr string
-	Count int
-}
-
-func (p *Producer) ID() string { return p.IDstr }
-
-func (p *Producer) Ready(w *kripke.World) []kripke.Step {
-	if p.Count >= 10 { return nil }
-	ch := w.ChannelByAddress(kripke.Address{ActorID: "consumer", ChannelName: "inbox"})
-	if ch == nil { return nil }
-	return []kripke.Step{
-		func(w *kripke.World) {
-			kripke.SendMessage(w, kripke.Message{
-				From: kripke.Address{ActorID: p.IDstr, ChannelName: "out"},
-				To: kripke.Address{ActorID: "consumer", ChannelName: "inbox"},
-				Payload: fmt.Sprintf("msg_%d", p.Count),
-			})
-			p.Count++
-		},
-	}
-}
-
-type Consumer struct {
-	IDstr string
-	Count int
-	Inbox *kripke.Channel
-}
-
-func (c *Consumer) ID() string { return c.IDstr }
-
-func (c *Consumer) Ready(w *kripke.World) []kripke.Step {
-	return []kripke.Step{
-		func(w *kripke.World) {
-			kripke.RecvAndLog(w, c.Inbox)
-			c.Count++
-		},
-	}
-}
-
-func main() {
-	ch := kripke.NewChannel("consumer", "inbox", 3)
-	producer := &Producer{IDstr: "producer"}
-	consumer := &Consumer{IDstr: "consumer", Inbox: ch}
-	
-	w := kripke.NewWorld(
-		[]kripke.Process{producer, consumer},
-		[]*kripke.Channel{ch},
-		42,
-	)
-	
-	for w.StepRandom() {}
-	
-	fmt.Printf("Producer sent: %d, Consumer received: %d\n", producer.Count, consumer.Count)
-}
-` + "`" + `
-	
-	content.WriteString(goCode)
-	content.WriteString("\n` + "`" + "`" + "`" + `\n\n")
-	
-	// TLA+ Specification
-	content.WriteString("## TLA+ Specification\n\n")
-	content.WriteString("A TLA+ specification using KripkeLib operators:\n\n")
-	content.WriteString("` + "`" + "`" + "`" + `tla\n")
-	tlaSpec := w.GenerateTLAPlus("ProducerConsumer")
-	content.WriteString(tlaSpec)
-	content.WriteString("\n` + "`" + "`" + "`" + `\n\n")
-	
-	content.WriteString("**KripkeLib Operators** (real TLA+ operators, not comments):\n")
-	content.WriteString("- **snd(channel, msg)**: Send message to channel (process calculus: channel ! msg)\n")
-	content.WriteString("- **rcv(channel)**: Receive from channel (process calculus: channel ? msg)\n")
-	content.WriteString("- **can_send(channel, capacity)**: Check if channel can accept message\n")
-	content.WriteString("- **can_recv(channel)**: Check if channel has messages\n")
-	content.WriteString("- **choice(lower, upper, guard, action)**: Probabilistic choice where lower <= R < upper (0-100)\n\n")
-	content.WriteString("See KripkeLib.tla for complete operator definitions.\n\n")
-	
-	// Architecture Notes
+	// Architecture
 	content.WriteString("## Architecture Notes\n\n")
-	content.WriteString("### Key Design Decisions\n\n")
-	content.WriteString("1. **Engine Handles Blocking**: Actors don't check CanSend()/CanRecv() - the engine automatically detects when channel operations would block and filters those steps out.\n\n")
-	content.WriteString("2. **Uniform Random Scheduling**: The engine picks one ready step uniformly at random from all actors, modeling non-deterministic concurrency.\n\n")
-	content.WriteString("3. **State Guards**: Actors use simple if statements for application logic (e.g., Count >= 10). The engine handles channel state.\n\n")
-	content.WriteString("4. **Buffered Channels**: The 3-message buffer allows the producer to get ahead of the consumer, demonstrating realistic producer-consumer dynamics.\n\n")
+	content.WriteString("### CANDIDATE = guard matches AND not blocked\n\n")
+	content.WriteString("Each Process represents ONE transition:\n")
+	content.WriteString("- Ready() checks ONE predicate\n")
+	content.WriteString("- Returns ONE step (or nil)\n")
+	content.WriteString("- Engine picks one candidate uniformly at random\n\n")
 	
-	content.WriteString("### Requirements for Code Generation\n\n")
-	content.WriteString("When generating code from this model:\n\n")
-	content.WriteString("1. **Preserve the actor structure**: Each actor has state, ID(), and Ready() methods\n")
-	content.WriteString("2. **Respect the guards**: Producer stops at 10 messages, consumer always ready\n")
-	content.WriteString("3. **Use buffered channels**: Capacity must be 3 to match the model\n")
-	content.WriteString("4. **Handle channel blocking**: Real implementation must match model's blocking semantics\n")
-	content.WriteString("5. **Track metrics**: Production code should track same metrics (sent, received, steps)\n\n")
+	// Save document
+	os.WriteFile("model_" + fmt.Sprintf("%d", time.Now().Unix()) + "-output.md", []byte(content.String()), 0644)
 	
-	content.WriteString("### Verification Criteria\n\n")
-	content.WriteString("Implementation is correct if:\n")
-	content.WriteString("- ✅ Producer sends exactly 10 messages\n")
-	content.WriteString("- ✅ Consumer receives all 10 messages\n")
-	content.WriteString("- ✅ No deadlocks occur\n")
-	content.WriteString("- ✅ Channel buffer respects capacity of 3\n")
-	content.WriteString("- ✅ All messages delivered in order (FIFO)\n\n")
-	
-	// Conclusion
-	content.WriteString("## Conclusion\n\n")
-	content.WriteString("This requirements document provides:\n")
-	content.WriteString("- **Executable specification**: The Go model can be run to verify behavior\n")
-	content.WriteString("- **Visual documentation**: Sequence diagrams, state machines, and charts\n")
-	content.WriteString("- **Metrics and statistics**: Quantitative measures of system behavior\n")
-	content.WriteString("- **Implementation guidance**: Clear requirements for code generation\n\n")
-	content.WriteString("Use this document as the source of truth when generating, modifying, or verifying implementations.\n\n")
-	content.WriteString("---\n\n")
-	content.WriteString("*This document was automatically generated by kripke-ctl from an executable model.*\n")
-	
-	os.WriteFile("` + projectID + `-output.md", []byte(content.String()), 0644)
-	
-	fmt.Printf("Producer sent: %d, Consumer received: %d\n", producer.Count, consumer.Count)
+	fmt.Printf("Production: %d, Sales: %d, Revenue: $%.2f, Profit: $%.2f\n", 
+		production.TotalMade, totalSales, storefront.Revenue, profit)
 }
 `
-	
-	log.Printf("📝 Using template with correct kripke architecture (engine handles blocking)")
+
+	_ = english  // Template doesn't use English description yet
+	_ = projectID
+
+	// Write the generated code to a file
+	filename := fmt.Sprintf("projects/model_%d.go", time.Now().Unix())
+	if err := os.MkdirAll("projects", 0755); err != nil {
+		return "", fmt.Errorf("failed to create projects directory: %w", err)
+	}
+
+	if err := os.WriteFile(filename, []byte(template), 0644); err != nil {
+		return "", fmt.Errorf("failed to write file: %w", err)
+	}
+
 	return template, nil
 }
-
 func executeModel(projectID, goCode string) (string, error) {
 	// Find project root by searching upward for go.mod
 	currentDir, err := os.Getwd()

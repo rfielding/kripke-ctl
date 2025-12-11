@@ -190,7 +190,7 @@ func (tr *TruckReceive) Ready(w *kripke.World) []kripke.Step {
 	
 	return []kripke.Step{
 		func(w *kripke.World) {
-			msg := kripke.RecvAndLog(w, tr.Truck.Loading)
+			msg, _ := kripke.RecvAndLog(w, tr.Truck.Loading)
 			if breadType, ok := msg.Payload.(string); ok {
 				tr.Truck.Inventory = append(tr.Truck.Inventory, breadType)
 				tr.Truck.State = "loading"
@@ -307,7 +307,7 @@ func (sr *StorefrontReceive) ID() string { return sr.IDstr }
 func (sr *StorefrontReceive) Ready(w *kripke.World) []kripke.Step {
 	return []kripke.Step{
 		func(w *kripke.World) {
-			msg := kripke.RecvAndLog(w, sr.Store.Delivery)
+			msg, _ := kripke.RecvAndLog(w, sr.Store.Delivery)
 			if breadType, ok := msg.Payload.(string); ok {
 				sr.Store.Inventory[breadType]++
 				fmt.Printf("[Storefront] Received %s (stock: %d)\n", 
@@ -328,7 +328,7 @@ func (ss *StorefrontSale) ID() string { return ss.IDstr }
 func (ss *StorefrontSale) Ready(w *kripke.World) []kripke.Step {
 	return []kripke.Step{
 		func(w *kripke.World) {
-			msg := kripke.RecvAndLog(w, ss.Store.SalesChan)
+			msg, _ := kripke.RecvAndLog(w, ss.Store.SalesChan)
 			if breadType, ok := msg.Payload.(string); ok {
 				if ss.Store.Inventory[breadType] > 0 {
 					ss.Store.Inventory[breadType]--
