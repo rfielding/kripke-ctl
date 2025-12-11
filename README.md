@@ -16,8 +16,6 @@ kripke-ctl is a formal methods toolkit designed for the LLM era. Unlike traditio
 - Global state (no separate actor instances)
 - No first-class message passing
 - No probability/chance nodes
-- Difficult to instantiate multiple actors
-- Models disconnected from implementation
 
 ### Prism
 ❌ **Tooling issues**
@@ -27,7 +25,6 @@ kripke-ctl is a formal methods toolkit designed for the LLM era. Unlike traditio
 
 ### Promela (SPIN)
 ❌ **Similar limitations to TLA+**
-- No easy actor instantiation
 - Message passing is verbose
 - Limited probabilistic support
 - Models don't inform implementation
@@ -49,6 +46,8 @@ LLM generates implementation from model
     ↓
 Verified software
 ```
+
+![ui.png](ui.png)
 
 ### Key Innovation: Models ARE the Requirements
 
