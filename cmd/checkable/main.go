@@ -661,49 +661,122 @@ const indexHTML = `<!doctype html>
 <body>
   <div class="pane">
     <div class="bar">
-      <button onclick="callLLM()">Ask LLM → Lisp</button>
+      <button id="btnAsk" type="button">Ask LLM → Lisp</button>
       <button onclick="clearOut()">Clear output</button>
     </div>
     <div><strong>Prev Lisp (source of truth)</strong></div>
     <textarea id="prev"></textarea>
     <div style="margin-top:8px"><strong>Clarification</strong></div>
-    <input id="clar" placeholder="Describe what to change / clarify..." />
+    <input id="clar" placeholder="Describe what to change / clarify..." rows=40 cols=80/>
   </div>
 
   <div class="pane">
     <div class="bar">
-      <button onclick="renderMarkdown()">Render Markdown</button>
-      <button onclick="copyLisp()">Copy Lisp to left</button>
+      <button id="btnMD" type="button">Render Markdown</button>
+      <button id="btnCopy">Copy Lisp to left</button>
     </div>
     <div><strong>LLM Output (must be Lisp only)</strong></div>
+    <div id="status" style="margin:8px 0; font-family: monospace;"></div>
     <pre id="out"></pre>
   </div>
 <script>
-async function renderMarkdown() {
-  const lisp = document.getElementById('prev').value.trim();
-  const out = document.getElementById('out');
-  if (!lisp) { out.textContent = "No Lisp to render."; return; }
+const KEY_LISP = "bctl_prev_lisp";
+const KEY_CLAR = "bctl_clarification";
 
-  out.textContent = "Rendering Markdown...";
-  const resp = await fetch('/api/markdown', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ lisp })
-  });
-  const txt = await resp.text();
-  if (!resp.ok) { out.textContent = txt; return; }
-
-  const j = JSON.parse(txt);
-  let md = j.markdown || "";
-  if (j.errors && j.errors.length) {
-    md += "\n\n---\n\n## Spec issues\n" + j.errors.map(e => "- " + e).join("\n") + "\n";
-  }
-  out.textContent = md;
+function setStatus(msg) {
+  document.getElementById('status').textContent = msg || "";
 }
+
+function saveState() {
+  localStorage.setItem(KEY_LISP, document.getElementById('prev').value);
+  localStorage.setItem(KEY_CLAR, document.getElementById('clar').value);
+}
+
+function loadState() {
+  const prev = localStorage.getItem(KEY_LISP);
+  const clar = localStorage.getItem(KEY_CLAR);
+  if (prev !== null) document.getElementById('prev').value = prev;
+  if (clar !== null) document.getElementById('clar').value = clar;
+}
+
+async function callLLM() {
+  try {
+    const prev = document.getElementById('prev').value;
+    const user = document.getElementById('clar').value;
+    const out = document.getElementById('out');
+
+    setStatus("Calling /api/llm ...");
+    out.textContent = "";
+
+    const resp = await fetch('/api/llm', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ prev_lisp: prev, user_text: user })
+    });
+
+    const txt = await resp.text();
+    if (!resp.ok) { setStatus("LLM error"); out.textContent = txt; return; }
+
+    const j = JSON.parse(txt);
+    if (!j.lisp || !j.lisp.trim()) {
+      setStatus("LLM returned empty Lisp (showing RAW)");
+      out.textContent = j.raw || txt;
+      return;
+    }
+
+    setStatus("LLM OK (Lisp shown)");
+    out.textContent = j.lisp;
+  } catch (e) {
+    setStatus("JS error: " + (e && e.message ? e.message : String(e)));
+  }
+}
+
+async function renderMarkdown() {
+  try {
+    const lisp = document.getElementById('prev').value.trim();
+    const out = document.getElementById('out');
+    if (!lisp) { setStatus("No Lisp to render"); out.textContent = ""; return; }
+
+    setStatus("Rendering Markdown...");
+    out.textContent = "";
+
+    const resp = await fetch('/api/markdown', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ lisp })
+    });
+
+    const txt = await resp.text();
+    if (!resp.ok) { setStatus("Markdown error"); out.textContent = txt; return; }
+
+    const j = JSON.parse(txt);
+    let md = j.markdown || "";
+    if (j.errors && j.errors.length) {
+      md += "\n\n---\n\n## Spec issues\n" + j.errors.map(e => "- " + e).join("\n") + "\n";
+    }
+    setStatus("Markdown OK");
+    out.textContent = md;
+  } catch (e) {
+    setStatus("JS error: " + (e && e.message ? e.message : String(e)));
+  }
+}
+
+function copyLispToLeft() {
+  document.getElementById('prev').value = document.getElementById('out').textContent;
+  saveState();
+  setStatus("Copied output to left");
+}
+
 window.addEventListener('DOMContentLoaded', () => {
   loadState();
-  hookAutosave();
-  renderMarkdown(); // auto-regenerate docs view
+  document.getElementById('prev').addEventListener('input', saveState);
+  document.getElementById('clar').addEventListener('input', saveState);
+
+  document.getElementById('btnAsk').addEventListener('click', callLLM);
+  document.getElementById('btnMD').addEventListener('click', renderMarkdown);
+  document.getElementById('btnCopy').addEventListener('click', copyLispToLeft);
+
+  setStatus("Ready");
 });
 </script>
 
