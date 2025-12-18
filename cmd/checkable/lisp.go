@@ -28,6 +28,7 @@ const (
 	TypeBool
 	TypeTailCall
 	TypeBlocked
+	TypeTagged
 )
 
 type Value struct {
@@ -43,13 +44,20 @@ type Value struct {
 	Bool    bool
 	Tail    *TailCall
 	Blocked *BlockedOp
+	Tagged  *TaggedValue
+}
+
+type TaggedValue struct {
+	Tag   string
+	Value Value
 }
 
 type Function struct {
-	Params []string
-	Body   Value
-	Env    *Env
-	IsTail bool
+	Params    []string
+	RestParam string
+	Body      Value
+	Env       *Env
+	IsTail    bool
 }
 
 type TailCall struct {
@@ -136,6 +144,10 @@ func (v Value) String() string {
 		return fmt.Sprintf("<queue %d/%d>", len(v.Queue.Data), v.Queue.Capacity)
 	case TypeBlocked:
 		return fmt.Sprintf("<blocked: %d>", v.Blocked.Reason)
+	case TypeTagged:
+		return fmt.Sprintf("#%s{%s}", v.Tagged.Tag, v.Tagged.Value.String())
+	case TypeActor:
+		return fmt.Sprintf("<actor:%s>", v.Symbol)
 	default:
 		return "<unknown>"
 	}
@@ -397,6 +409,8 @@ func (p *Parser) parseExpr() Value {
 	switch p.current.Type {
 	case TokLParen:
 		p.advance()
+		
+		// Normal list
 		var items []Value
 		for p.current.Type != TokRParen && p.current.Type != TokEOF {
 			items = append(items, p.parseExpr())
@@ -405,9 +419,10 @@ func (p *Parser) parseExpr() Value {
 		return Lst(items...)
 
 	case TokQuote:
-		// Just return quote as a symbol, let evaluator handle (' ...) forms
 		p.advance()
-		return Sym("'")
+		// Quote wraps next expression: 'x -> (quote x)
+		expr := p.parseExpr()
+		return Lst(Sym("quote"), expr)
 
 	case TokNumber:
 		tok := p.advance()
@@ -485,14 +500,169 @@ func (e *Env) SetLocal(name string, val Value) {
 // ============================================================================
 
 type Evaluator struct {
-	CallStack *BoundedStack
-	GlobalEnv *Env
+	CallStack    *BoundedStack
+	GlobalEnv    *Env
+	Registry     map[string]Value
+	GensymCount  int64
+	Scheduler    *Scheduler
+}
+
+// ============================================================================
+// Scheduler and Actors
+// ============================================================================
+
+type ActorState int
+
+const (
+	ActorRunnable ActorState = iota
+	ActorBlocked
+	ActorDone
+)
+
+type Actor struct {
+	Name      string
+	Mailbox   *BoundedQueue
+	State     ActorState
+	BlockedOn string         // Description of what we're blocked on
+	Env       *Env           // Actor's local environment
+	Code      Value          // Current code to execute (continuation)
+	Result    Value          // Last result
+}
+
+type Scheduler struct {
+	Actors       map[string]*Actor
+	RunQueue     []string      // Names of runnable actors
+	CurrentActor string        // Currently executing actor
+	StepCount    int64
+	MaxSteps     int64         // 0 = unlimited
+	Trace        bool          // Print execution trace
+}
+
+func NewScheduler() *Scheduler {
+	return &Scheduler{
+		Actors:   make(map[string]*Actor),
+		RunQueue: make([]string, 0),
+		MaxSteps: 0,
+		Trace:    false,
+	}
+}
+
+func (s *Scheduler) AddActor(name string, mailboxSize int, env *Env, code Value) *Actor {
+	actor := &Actor{
+		Name:    name,
+		Mailbox: NewQueue(mailboxSize),
+		State:   ActorRunnable,
+		Env:     env,
+		Code:    code,
+		Result:  Nil(),
+	}
+	s.Actors[name] = actor
+	s.RunQueue = append(s.RunQueue, name)
+	return actor
+}
+
+func (s *Scheduler) GetActor(name string) *Actor {
+	return s.Actors[name]
+}
+
+func (s *Scheduler) BlockActor(name string, reason string) {
+	if actor, ok := s.Actors[name]; ok {
+		actor.State = ActorBlocked
+		actor.BlockedOn = reason
+		// Remove from run queue
+		newQueue := make([]string, 0, len(s.RunQueue))
+		for _, n := range s.RunQueue {
+			if n != name {
+				newQueue = append(newQueue, n)
+			}
+		}
+		s.RunQueue = newQueue
+	}
+}
+
+func (s *Scheduler) UnblockActor(name string) {
+	if actor, ok := s.Actors[name]; ok {
+		if actor.State == ActorBlocked {
+			actor.State = ActorRunnable
+			actor.BlockedOn = ""
+			s.RunQueue = append(s.RunQueue, name)
+		}
+	}
+}
+
+func (s *Scheduler) MarkDone(name string) {
+	if actor, ok := s.Actors[name]; ok {
+		actor.State = ActorDone
+		// Remove from run queue
+		newQueue := make([]string, 0, len(s.RunQueue))
+		for _, n := range s.RunQueue {
+			if n != name {
+				newQueue = append(newQueue, n)
+			}
+		}
+		s.RunQueue = newQueue
+	}
+}
+
+func (s *Scheduler) IsDeadlocked() bool {
+	// Deadlock if no actors are runnable and at least one is blocked
+	if len(s.RunQueue) > 0 {
+		return false
+	}
+	for _, actor := range s.Actors {
+		if actor.State == ActorBlocked {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *Scheduler) AllDone() bool {
+	for _, actor := range s.Actors {
+		if actor.State != ActorDone {
+			return false
+		}
+	}
+	return len(s.Actors) > 0
+}
+
+func (s *Scheduler) NextActor() *Actor {
+	if len(s.RunQueue) == 0 {
+		return nil
+	}
+	name := s.RunQueue[0]
+	// Rotate queue (round-robin)
+	s.RunQueue = append(s.RunQueue[1:], name)
+	s.CurrentActor = name
+	return s.Actors[name]
+}
+
+func (s *Scheduler) Status() string {
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("Step %d:\n", s.StepCount))
+	for name, actor := range s.Actors {
+		state := "runnable"
+		extra := ""
+		switch actor.State {
+		case ActorBlocked:
+			state = "blocked"
+			extra = fmt.Sprintf(" on %s", actor.BlockedOn)
+		case ActorDone:
+			state = "done"
+		}
+		sb.WriteString(fmt.Sprintf("  %s: %s%s (mailbox: %d/%d)\n", 
+			name, state, extra, len(actor.Mailbox.Data), actor.Mailbox.Capacity))
+	}
+	return sb.String()
 }
 
 func NewEvaluator(callStackDepth int) *Evaluator {
 	ev := &Evaluator{
-		CallStack: NewStack(callStackDepth),
-		GlobalEnv: NewEnv(nil),
+		CallStack:   NewStack(callStackDepth),
+		GlobalEnv:   NewEnv(nil),
+		Registry:    make(map[string]Value),
+		GensymCount: 0,
+		Scheduler:   NewScheduler(),
 	}
 	ev.setupBuiltins()
 	return ev
@@ -538,6 +708,9 @@ func (ev *Evaluator) setupBuiltins() {
 	env.Set("string?", Value{Type: TypeBuiltin, Builtin: builtinIsString})
 	env.Set("nil?", Value{Type: TypeBuiltin, Builtin: builtinIsNil})
 
+	// Evaluation
+	env.Set("eval", Value{Type: TypeBuiltin, Builtin: builtinEval})
+
 	// Bounded structures
 	env.Set("make-stack", Value{Type: TypeBuiltin, Builtin: builtinMakeStack})
 	env.Set("make-queue", Value{Type: TypeBuiltin, Builtin: builtinMakeQueue})
@@ -568,6 +741,46 @@ func (ev *Evaluator) setupBuiltins() {
 	env.Set("print", Value{Type: TypeBuiltin, Builtin: builtinPrint})
 	env.Set("println", Value{Type: TypeBuiltin, Builtin: builtinPrintln})
 	env.Set("repr", Value{Type: TypeBuiltin, Builtin: builtinRepr})
+
+	// String operations
+	env.Set("string-append", Value{Type: TypeBuiltin, Builtin: builtinStringAppend})
+	env.Set("symbol->string", Value{Type: TypeBuiltin, Builtin: builtinSymbolToString})
+	env.Set("string->symbol", Value{Type: TypeBuiltin, Builtin: builtinStringToSymbol})
+	env.Set("number->string", Value{Type: TypeBuiltin, Builtin: builtinNumberToString})
+
+	// Registry
+	env.Set("registry-set!", Value{Type: TypeBuiltin, Builtin: builtinRegistrySet})
+	env.Set("registry-get", Value{Type: TypeBuiltin, Builtin: builtinRegistryGet})
+	env.Set("registry-keys", Value{Type: TypeBuiltin, Builtin: builtinRegistryKeys})
+	env.Set("registry-has?", Value{Type: TypeBuiltin, Builtin: builtinRegistryHas})
+	env.Set("registry-delete!", Value{Type: TypeBuiltin, Builtin: builtinRegistryDelete})
+
+	// Type tagging
+	env.Set("tag", Value{Type: TypeBuiltin, Builtin: builtinTag})
+	env.Set("tag-type", Value{Type: TypeBuiltin, Builtin: builtinTagType})
+	env.Set("tag-value", Value{Type: TypeBuiltin, Builtin: builtinTagValue})
+	env.Set("tagged?", Value{Type: TypeBuiltin, Builtin: builtinIsTagged})
+	env.Set("tag-is?", Value{Type: TypeBuiltin, Builtin: builtinTagIs})
+
+	// Symbol generation
+	env.Set("gensym", Value{Type: TypeBuiltin, Builtin: builtinGensym})
+
+	// Scheduler and actor management
+	env.Set("spawn-actor", Value{Type: TypeBuiltin, Builtin: builtinSpawnActor})
+	env.Set("self", Value{Type: TypeBuiltin, Builtin: builtinSelf})
+	env.Set("send-to!", Value{Type: TypeBuiltin, Builtin: builtinSendTo})
+	env.Set("receive!", Value{Type: TypeBuiltin, Builtin: builtinReceive})
+	env.Set("receive-now!", Value{Type: TypeBuiltin, Builtin: builtinReceiveNow})
+	env.Set("mailbox-empty?", Value{Type: TypeBuiltin, Builtin: builtinMailboxEmpty})
+	env.Set("mailbox-full?", Value{Type: TypeBuiltin, Builtin: builtinMailboxFull})
+	env.Set("yield!", Value{Type: TypeBuiltin, Builtin: builtinYield})
+	env.Set("done!", Value{Type: TypeBuiltin, Builtin: builtinDone})
+	env.Set("run-scheduler", Value{Type: TypeBuiltin, Builtin: builtinRunScheduler})
+	env.Set("scheduler-status", Value{Type: TypeBuiltin, Builtin: builtinSchedulerStatus})
+	env.Set("set-trace!", Value{Type: TypeBuiltin, Builtin: builtinSetTrace})
+	env.Set("actor-state", Value{Type: TypeBuiltin, Builtin: builtinActorState})
+	env.Set("list-actors-sched", Value{Type: TypeBuiltin, Builtin: builtinListActorsSched})
+	env.Set("reset-scheduler", Value{Type: TypeBuiltin, Builtin: builtinResetScheduler})
 }
 
 func (ev *Evaluator) Eval(expr Value, env *Env) Value {
@@ -584,11 +797,25 @@ func (ev *Evaluator) Eval(expr Value, env *Env) Value {
 			if tc.Func.Type == TypeFunc {
 				fn := tc.Func.Func
 				env = NewEnv(fn.Env)
+				
+				// Bind regular parameters
 				for i, param := range fn.Params {
 					if i < len(tc.Args) {
 						env.Set(param, tc.Args[i])
+					} else {
+						env.Set(param, Nil())
 					}
 				}
+				
+				// Bind rest parameter if present
+				if fn.RestParam != "" {
+					restArgs := make([]Value, 0)
+					if len(tc.Args) > len(fn.Params) {
+						restArgs = tc.Args[len(fn.Params):]
+					}
+					env.Set(fn.RestParam, Lst(restArgs...))
+				}
+				
 				expr = fn.Body
 			} else {
 				// Not a function, just call normally
@@ -626,13 +853,9 @@ func (ev *Evaluator) evalStep(expr Value, env *Env) Value {
 		// Special forms
 		if head.IsSymbol() {
 			switch head.Symbol {
-			case "'": // Quote
-				if len(expr.List) == 2 {
-					// (' x) - return x unevaluated
+			case "quote": // Quote - return argument unevaluated
+				if len(expr.List) > 1 {
 					return expr.List[1]
-				} else if len(expr.List) > 2 {
-					// (' a b c) - return (a b c) as a list
-					return Lst(expr.List[1:]...)
 				}
 				return Nil()
 
@@ -670,6 +893,10 @@ func (ev *Evaluator) evalStep(expr Value, env *Env) Value {
 				}
 				name := expr.List[1]
 				val := ev.Eval(expr.List[2], env)
+				// Propagate blocked status
+				if val.Type == TypeBlocked {
+					return val
+				}
 				newEnv := NewEnv(env)
 				newEnv.Set(name.Symbol, val)
 				if len(expr.List) > 3 {
@@ -700,7 +927,12 @@ func (ev *Evaluator) evalStep(expr Value, env *Env) Value {
 				}
 				name := expr.List[1].Symbol
 				val := ev.Eval(expr.List[2], env)
-				env.SetLocal(name, val)
+				// Try to set in existing scope, fall back to global
+				if _, found := env.Get(name); found {
+					env.SetLocal(name, val)
+				} else {
+					ev.GlobalEnv.Set(name, val)
+				}
 				return val
 
 			case "define":
@@ -712,14 +944,27 @@ func (ev *Evaluator) evalStep(expr Value, env *Env) Value {
 					// Function shorthand
 					sig := expr.List[1].List
 					name := sig[0].Symbol
-					params := make([]string, len(sig)-1)
-					for i, p := range sig[1:] {
-						params[i] = p.Symbol
+					params := make([]string, 0)
+					restParam := ""
+					sigParams := sig[1:] // Parameters part of signature
+					for i := 0; i < len(sigParams); i++ {
+						p := sigParams[i]
+						if p.IsSymbol() && p.Symbol == "." {
+							// Rest parameter: next symbol is the rest param name
+							if i+1 < len(sigParams) && sigParams[i+1].IsSymbol() {
+								restParam = sigParams[i+1].Symbol
+							}
+							break
+						}
+						if p.IsSymbol() {
+							params = append(params, p.Symbol)
+						}
 					}
 					fn := &Function{
-						Params: params,
-						Body:   expr.List[2],
-						Env:    env,
+						Params:    params,
+						RestParam: restParam,
+						Body:      expr.List[2],
+						Env:       env,
 					}
 					val := Value{Type: TypeFunc, Func: fn}
 					ev.GlobalEnv.Set(name, val)
@@ -736,17 +981,30 @@ func (ev *Evaluator) evalStep(expr Value, env *Env) Value {
 					return Nil()
 				}
 				params := make([]string, 0)
+				restParam := ""
 				if expr.List[1].IsList() {
-					for _, p := range expr.List[1].List {
-						params = append(params, p.Symbol)
+					paramList := expr.List[1].List
+					for i := 0; i < len(paramList); i++ {
+						p := paramList[i]
+						if p.IsSymbol() && p.Symbol == "." {
+							// Rest parameter: next symbol is the rest param name
+							if i+1 < len(paramList) && paramList[i+1].IsSymbol() {
+								restParam = paramList[i+1].Symbol
+							}
+							break
+						}
+						if p.IsSymbol() {
+							params = append(params, p.Symbol)
+						}
 					}
 				}
 				return Value{
 					Type: TypeFunc,
 					Func: &Function{
-						Params: params,
-						Body:   expr.List[2],
-						Env:    env,
+						Params:    params,
+						RestParam: restParam,
+						Body:      expr.List[2],
+						Env:       env,
 					},
 				}
 
@@ -769,6 +1027,10 @@ func (ev *Evaluator) evalStep(expr Value, env *Env) Value {
 				var result Value = Nil()
 				for _, e := range expr.List[1:] {
 					result = ev.Eval(e, env)
+					// Propagate blocked status
+					if result.Type == TypeBlocked {
+						return result
+					}
 				}
 				return result
 
@@ -816,10 +1078,23 @@ func (ev *Evaluator) apply(fn Value, args []Value, env *Env) Value {
 	case TypeFunc:
 		f := fn.Func
 		newEnv := NewEnv(f.Env)
+		
+		// Bind regular parameters
 		for i, param := range f.Params {
 			if i < len(args) {
 				newEnv.Set(param, args[i])
+			} else {
+				newEnv.Set(param, Nil())
 			}
+		}
+		
+		// Bind rest parameter if present
+		if f.RestParam != "" {
+			restArgs := make([]Value, 0)
+			if len(args) > len(f.Params) {
+				restArgs = args[len(f.Params):]
+			}
+			newEnv.Set(f.RestParam, Lst(restArgs...))
 		}
 
 		// Check call stack bounds
@@ -1130,6 +1405,15 @@ func builtinIsNil(ev *Evaluator, args []Value, env *Env) Value {
 	return Bool(args[0].Type == TypeNil)
 }
 
+// eval - evaluate a data structure as code
+func builtinEval(ev *Evaluator, args []Value, env *Env) Value {
+	if len(args) == 0 {
+		return Nil()
+	}
+	// Evaluate the argument in the global environment
+	return ev.Eval(args[0], ev.GlobalEnv)
+}
+
 func builtinMakeStack(ev *Evaluator, args []Value, env *Env) Value {
 	capacity := 16
 	if len(args) > 0 {
@@ -1361,31 +1645,679 @@ func builtinRepr(ev *Evaluator, args []Value, env *Env) Value {
 }
 
 // ============================================================================
+// String Operations
+// ============================================================================
+
+func builtinStringAppend(ev *Evaluator, args []Value, env *Env) Value {
+	var sb strings.Builder
+	for _, arg := range args {
+		switch arg.Type {
+		case TypeString:
+			sb.WriteString(arg.Str)
+		case TypeSymbol:
+			sb.WriteString(arg.Symbol)
+		case TypeNumber:
+			if arg.Number == float64(int64(arg.Number)) {
+				sb.WriteString(fmt.Sprintf("%d", int64(arg.Number)))
+			} else {
+				sb.WriteString(fmt.Sprintf("%g", arg.Number))
+			}
+		default:
+			sb.WriteString(arg.String())
+		}
+	}
+	return Str(sb.String())
+}
+
+func builtinSymbolToString(ev *Evaluator, args []Value, env *Env) Value {
+	if len(args) == 0 {
+		return Str("")
+	}
+	if args[0].Type == TypeSymbol {
+		return Str(args[0].Symbol)
+	}
+	return Str(args[0].String())
+}
+
+func builtinStringToSymbol(ev *Evaluator, args []Value, env *Env) Value {
+	if len(args) == 0 {
+		return Sym("")
+	}
+	if args[0].Type == TypeString {
+		return Sym(args[0].Str)
+	}
+	if args[0].Type == TypeSymbol {
+		return args[0]
+	}
+	return Sym(args[0].String())
+}
+
+func builtinNumberToString(ev *Evaluator, args []Value, env *Env) Value {
+	if len(args) == 0 {
+		return Str("0")
+	}
+	if args[0].Type == TypeNumber {
+		if args[0].Number == float64(int64(args[0].Number)) {
+			return Str(fmt.Sprintf("%d", int64(args[0].Number)))
+		}
+		return Str(fmt.Sprintf("%g", args[0].Number))
+	}
+	return Str(args[0].String())
+}
+
+// ============================================================================
+// Registry Builtins
+// ============================================================================
+
+func builtinRegistrySet(ev *Evaluator, args []Value, env *Env) Value {
+	if len(args) < 2 {
+		return Nil()
+	}
+	var name string
+	if args[0].Type == TypeSymbol {
+		name = args[0].Symbol
+	} else if args[0].Type == TypeString {
+		name = args[0].Str
+	} else {
+		return Nil()
+	}
+	ev.Registry[name] = args[1]
+	return args[1]
+}
+
+func builtinRegistryGet(ev *Evaluator, args []Value, env *Env) Value {
+	if len(args) < 1 {
+		return Nil()
+	}
+	var name string
+	if args[0].Type == TypeSymbol {
+		name = args[0].Symbol
+	} else if args[0].Type == TypeString {
+		name = args[0].Str
+	} else {
+		return Nil()
+	}
+	if v, ok := ev.Registry[name]; ok {
+		return v
+	}
+	return Nil()
+}
+
+func builtinRegistryKeys(ev *Evaluator, args []Value, env *Env) Value {
+	keys := make([]Value, 0, len(ev.Registry))
+	for k := range ev.Registry {
+		keys = append(keys, Sym(k))
+	}
+	return Lst(keys...)
+}
+
+func builtinRegistryHas(ev *Evaluator, args []Value, env *Env) Value {
+	if len(args) < 1 {
+		return Bool(false)
+	}
+	var name string
+	if args[0].Type == TypeSymbol {
+		name = args[0].Symbol
+	} else if args[0].Type == TypeString {
+		name = args[0].Str
+	} else {
+		return Bool(false)
+	}
+	_, ok := ev.Registry[name]
+	return Bool(ok)
+}
+
+func builtinRegistryDelete(ev *Evaluator, args []Value, env *Env) Value {
+	if len(args) < 1 {
+		return Bool(false)
+	}
+	var name string
+	if args[0].Type == TypeSymbol {
+		name = args[0].Symbol
+	} else if args[0].Type == TypeString {
+		name = args[0].Str
+	} else {
+		return Bool(false)
+	}
+	if _, ok := ev.Registry[name]; ok {
+		delete(ev.Registry, name)
+		return Bool(true)
+	}
+	return Bool(false)
+}
+
+// ============================================================================
+// Type Tagging Builtins
+// ============================================================================
+
+func builtinTag(ev *Evaluator, args []Value, env *Env) Value {
+	if len(args) < 2 {
+		return Nil()
+	}
+	var tagName string
+	if args[0].Type == TypeSymbol {
+		tagName = args[0].Symbol
+	} else if args[0].Type == TypeString {
+		tagName = args[0].Str
+	} else {
+		return Nil()
+	}
+	return Value{
+		Type: TypeTagged,
+		Tagged: &TaggedValue{
+			Tag:   tagName,
+			Value: args[1],
+		},
+	}
+}
+
+func builtinTagType(ev *Evaluator, args []Value, env *Env) Value {
+	if len(args) < 1 || args[0].Type != TypeTagged {
+		return Nil()
+	}
+	return Sym(args[0].Tagged.Tag)
+}
+
+func builtinTagValue(ev *Evaluator, args []Value, env *Env) Value {
+	if len(args) < 1 || args[0].Type != TypeTagged {
+		return Nil()
+	}
+	return args[0].Tagged.Value
+}
+
+func builtinIsTagged(ev *Evaluator, args []Value, env *Env) Value {
+	if len(args) < 1 {
+		return Bool(false)
+	}
+	return Bool(args[0].Type == TypeTagged)
+}
+
+func builtinTagIs(ev *Evaluator, args []Value, env *Env) Value {
+	if len(args) < 2 || args[0].Type != TypeTagged {
+		return Bool(false)
+	}
+	var tagName string
+	if args[1].Type == TypeSymbol {
+		tagName = args[1].Symbol
+	} else if args[1].Type == TypeString {
+		tagName = args[1].Str
+	} else {
+		return Bool(false)
+	}
+	return Bool(args[0].Tagged.Tag == tagName)
+}
+
+// ============================================================================
+// Symbol Generation
+// ============================================================================
+
+func builtinGensym(ev *Evaluator, args []Value, env *Env) Value {
+	prefix := "g"
+	if len(args) > 0 {
+		if args[0].Type == TypeSymbol {
+			prefix = args[0].Symbol
+		} else if args[0].Type == TypeString {
+			prefix = args[0].Str
+		}
+	}
+	ev.GensymCount++
+	return Sym(fmt.Sprintf("%s-%d", prefix, ev.GensymCount))
+}
+
+// ============================================================================
+// Scheduler Builtins
+// ============================================================================
+
+// TypeActor for actor references
+const TypeActor ValueType = 100
+
+type ActorRef struct {
+	Name string
+}
+
+func ActorVal(name string) Value {
+	return Value{Type: TypeActor, Symbol: name}
+}
+
+func (v Value) IsActor() bool {
+	return v.Type == TypeActor
+}
+
+// (spawn-actor name mailbox-size body)
+// Creates a new actor with the given name, mailbox size, and initial code
+func builtinSpawnActor(ev *Evaluator, args []Value, env *Env) Value {
+	if len(args) < 3 {
+		fmt.Fprintln(os.Stderr, "spawn-actor: need name, mailbox-size, body")
+		return Nil()
+	}
+	
+	var name string
+	if args[0].Type == TypeSymbol {
+		name = args[0].Symbol
+	} else if args[0].Type == TypeString {
+		name = args[0].Str
+	} else {
+		fmt.Fprintln(os.Stderr, "spawn-actor: name must be symbol or string")
+		return Nil()
+	}
+	
+	mailboxSize := 16
+	if args[1].Type == TypeNumber {
+		mailboxSize = int(args[1].Number)
+	}
+	
+	// Create actor's own environment (inherits from global)
+	actorEnv := NewEnv(ev.GlobalEnv)
+	
+	// The body is a thunk (code to execute)
+	body := args[2]
+	
+	ev.Scheduler.AddActor(name, mailboxSize, actorEnv, body)
+	
+	return ActorVal(name)
+}
+
+// (self) - returns current actor's name
+func builtinSelf(ev *Evaluator, args []Value, env *Env) Value {
+	if ev.Scheduler.CurrentActor == "" {
+		return Nil()
+	}
+	return Sym(ev.Scheduler.CurrentActor)
+}
+
+// (send-to! actor-name message)
+// Sends a message to the named actor's mailbox
+// Blocks if mailbox is full
+func builtinSendTo(ev *Evaluator, args []Value, env *Env) Value {
+	if len(args) < 2 {
+		fmt.Fprintln(os.Stderr, "send-to!: need actor-name and message")
+		return Nil()
+	}
+	
+	var targetName string
+	if args[0].Type == TypeSymbol {
+		targetName = args[0].Symbol
+	} else if args[0].Type == TypeString {
+		targetName = args[0].Str
+	} else if args[0].Type == TypeActor {
+		targetName = args[0].Symbol
+	} else {
+		fmt.Fprintln(os.Stderr, "send-to!: target must be symbol, string, or actor ref")
+		return Nil()
+	}
+	
+	target := ev.Scheduler.GetActor(targetName)
+	if target == nil {
+		fmt.Fprintf(os.Stderr, "send-to!: unknown actor %s\n", targetName)
+		return Nil()
+	}
+	
+	message := args[1]
+	
+	if target.Mailbox.SendNow(message) {
+		// Message sent successfully
+		// If target was blocked on receive, unblock it
+		if target.State == ActorBlocked && strings.HasPrefix(target.BlockedOn, "recv") {
+			ev.Scheduler.UnblockActor(targetName)
+		}
+		return Sym("ok")
+	} else {
+		// Mailbox full, block sender
+		if ev.Scheduler.CurrentActor != "" {
+			ev.Scheduler.BlockActor(ev.Scheduler.CurrentActor, 
+				fmt.Sprintf("send-to %s (full)", targetName))
+		}
+		return Blocked(BlockQueueFull)
+	}
+}
+
+// (receive!) - receive from own mailbox, blocks if empty
+func builtinReceive(ev *Evaluator, args []Value, env *Env) Value {
+	if ev.Scheduler.CurrentActor == "" {
+		fmt.Fprintln(os.Stderr, "receive!: no current actor")
+		return Nil()
+	}
+	
+	actor := ev.Scheduler.GetActor(ev.Scheduler.CurrentActor)
+	if actor == nil {
+		return Nil()
+	}
+	
+	if msg, ok := actor.Mailbox.RecvNow(); ok {
+		return msg
+	} else {
+		// Mailbox empty, block
+		ev.Scheduler.BlockActor(ev.Scheduler.CurrentActor, "recv (empty)")
+		return Blocked(BlockQueueEmpty)
+	}
+}
+
+// (receive-now!) - non-blocking receive, returns 'empty if nothing
+func builtinReceiveNow(ev *Evaluator, args []Value, env *Env) Value {
+	if ev.Scheduler.CurrentActor == "" {
+		fmt.Fprintln(os.Stderr, "receive-now!: no current actor")
+		return Sym("empty")
+	}
+	
+	actor := ev.Scheduler.GetActor(ev.Scheduler.CurrentActor)
+	if actor == nil {
+		return Sym("empty")
+	}
+	
+	if msg, ok := actor.Mailbox.RecvNow(); ok {
+		return msg
+	}
+	return Sym("empty")
+}
+
+// (mailbox-empty?) - check if own mailbox is empty
+func builtinMailboxEmpty(ev *Evaluator, args []Value, env *Env) Value {
+	if ev.Scheduler.CurrentActor == "" {
+		return Bool(true)
+	}
+	actor := ev.Scheduler.GetActor(ev.Scheduler.CurrentActor)
+	if actor == nil {
+		return Bool(true)
+	}
+	return Bool(actor.Mailbox.IsEmpty())
+}
+
+// (mailbox-full? actor-name) - check if actor's mailbox is full
+func builtinMailboxFull(ev *Evaluator, args []Value, env *Env) Value {
+	var targetName string
+	if len(args) > 0 {
+		if args[0].Type == TypeSymbol {
+			targetName = args[0].Symbol
+		} else if args[0].Type == TypeString {
+			targetName = args[0].Str
+		}
+	} else if ev.Scheduler.CurrentActor != "" {
+		targetName = ev.Scheduler.CurrentActor
+	} else {
+		return Bool(false)
+	}
+	
+	actor := ev.Scheduler.GetActor(targetName)
+	if actor == nil {
+		return Bool(false)
+	}
+	return Bool(actor.Mailbox.IsFull())
+}
+
+// (yield!) - voluntarily give up execution
+func builtinYield(ev *Evaluator, args []Value, env *Env) Value {
+	// This is a marker - the scheduler will handle it
+	return Sym("yield")
+}
+
+// (done!) - mark current actor as finished
+func builtinDone(ev *Evaluator, args []Value, env *Env) Value {
+	if ev.Scheduler.CurrentActor != "" {
+		ev.Scheduler.MarkDone(ev.Scheduler.CurrentActor)
+	}
+	return Sym("done")
+}
+
+// (run-scheduler max-steps) - run the scheduler
+func builtinRunScheduler(ev *Evaluator, args []Value, env *Env) Value {
+	maxSteps := int64(10000)
+	if len(args) > 0 && args[0].Type == TypeNumber {
+		maxSteps = int64(args[0].Number)
+	}
+	
+	ev.Scheduler.MaxSteps = maxSteps
+	ev.Scheduler.StepCount = 0
+	
+	for ev.Scheduler.StepCount < maxSteps {
+		// Check termination conditions
+		if ev.Scheduler.AllDone() {
+			return Lst(Sym("completed"), Num(float64(ev.Scheduler.StepCount)))
+		}
+		if ev.Scheduler.IsDeadlocked() {
+			// Return deadlock info
+			blocked := make([]Value, 0)
+			for name, actor := range ev.Scheduler.Actors {
+				if actor.State == ActorBlocked {
+					blocked = append(blocked, Lst(Sym(name), Str(actor.BlockedOn)))
+				}
+			}
+			return Lst(Sym("deadlock"), Num(float64(ev.Scheduler.StepCount)), Lst(blocked...))
+		}
+		
+		// Get next actor
+		actor := ev.Scheduler.NextActor()
+		if actor == nil {
+			// No runnable actors but not deadlocked - all must be done
+			return Lst(Sym("completed"), Num(float64(ev.Scheduler.StepCount)))
+		}
+		
+		if ev.Scheduler.Trace {
+			fmt.Printf("[%d] Running %s\n", ev.Scheduler.StepCount, actor.Name)
+		}
+		
+		// Execute one step of actor's code
+		if ev.Scheduler.Trace {
+			fmt.Printf("    code: %s\n", actor.Code.String())
+		}
+		result := ev.Eval(actor.Code, actor.Env)
+		actor.Result = result
+		ev.Scheduler.StepCount++
+		
+		if ev.Scheduler.Trace {
+			fmt.Printf("    result: %s\n", result.String())
+		}
+		
+		// Check result
+		if result.Type == TypeBlocked {
+			// Already blocked by the operation
+			if ev.Scheduler.Trace {
+				fmt.Printf("    %s blocked: %s\n", actor.Name, actor.BlockedOn)
+			}
+		} else if result.Type == TypeSymbol && result.Symbol == "yield" {
+			// Yielded voluntarily - stays runnable, re-run same code
+			if ev.Scheduler.Trace {
+				fmt.Printf("    %s yielded\n", actor.Name)
+			}
+		} else if result.Type == TypeSymbol && result.Symbol == "done" {
+			// Actor finished
+			ev.Scheduler.MarkDone(actor.Name)
+			if ev.Scheduler.Trace {
+				fmt.Printf("    %s done\n", actor.Name)
+			}
+		} else if result.IsList() && len(result.List) >= 2 {
+			// Check for (next-state new-code) or (become new-code)
+			if result.List[0].IsSymbol() && result.List[0].Symbol == "become" {
+				// Change actor's code
+				actor.Code = result.List[1]
+				if ev.Scheduler.Trace {
+					fmt.Printf("    %s become %s\n", actor.Name, result.List[1].String())
+				}
+			} else if result.List[0].IsSymbol() && result.List[0].Symbol == "continue" {
+				// Update code and keep running
+				actor.Code = result.List[1]
+			}
+		}
+		
+		// Try to unblock actors whose conditions may have changed
+		ev.tryUnblockActors()
+	}
+	
+	return Lst(Sym("max-steps"), Num(float64(ev.Scheduler.StepCount)))
+}
+
+// Try to unblock actors that can now proceed
+func (ev *Evaluator) tryUnblockActors() {
+	for name, actor := range ev.Scheduler.Actors {
+		if actor.State != ActorBlocked {
+			continue
+		}
+		
+		if strings.HasPrefix(actor.BlockedOn, "recv") {
+			// Blocked on receive - check if mailbox now has messages
+			if !actor.Mailbox.IsEmpty() {
+				ev.Scheduler.UnblockActor(name)
+			}
+		} else if strings.HasPrefix(actor.BlockedOn, "send-to ") {
+			// Blocked on send - check if target mailbox has space
+			parts := strings.Split(actor.BlockedOn, " ")
+			if len(parts) >= 2 {
+				targetName := parts[1]
+				target := ev.Scheduler.GetActor(targetName)
+				if target != nil && !target.Mailbox.IsFull() {
+					ev.Scheduler.UnblockActor(name)
+				}
+			}
+		}
+	}
+}
+
+// (scheduler-status) - print scheduler state
+func builtinSchedulerStatus(ev *Evaluator, args []Value, env *Env) Value {
+	fmt.Print(ev.Scheduler.Status())
+	return Nil()
+}
+
+// (set-trace! bool) - enable/disable execution tracing
+func builtinSetTrace(ev *Evaluator, args []Value, env *Env) Value {
+	if len(args) > 0 {
+		ev.Scheduler.Trace = args[0].IsTruthy()
+	}
+	return Bool(ev.Scheduler.Trace)
+}
+
+// (actor-state name) - get actor's current state
+func builtinActorState(ev *Evaluator, args []Value, env *Env) Value {
+	if len(args) == 0 {
+		return Nil()
+	}
+	var name string
+	if args[0].Type == TypeSymbol {
+		name = args[0].Symbol
+	} else if args[0].Type == TypeString {
+		name = args[0].Str
+	} else {
+		return Nil()
+	}
+	
+	actor := ev.Scheduler.GetActor(name)
+	if actor == nil {
+		return Nil()
+	}
+	
+	state := "unknown"
+	switch actor.State {
+	case ActorRunnable:
+		state = "runnable"
+	case ActorBlocked:
+		state = "blocked"
+	case ActorDone:
+		state = "done"
+	}
+	
+	return Lst(
+		Sym(state),
+		Str(actor.BlockedOn),
+		Num(float64(len(actor.Mailbox.Data))),
+		Num(float64(actor.Mailbox.Capacity)),
+	)
+}
+
+// (list-actors-sched) - list all actors in scheduler
+func builtinListActorsSched(ev *Evaluator, args []Value, env *Env) Value {
+	names := make([]Value, 0, len(ev.Scheduler.Actors))
+	for name := range ev.Scheduler.Actors {
+		names = append(names, Sym(name))
+	}
+	return Lst(names...)
+}
+
+// (reset-scheduler) - clear all actors and reset scheduler state
+func builtinResetScheduler(ev *Evaluator, args []Value, env *Env) Value {
+	ev.Scheduler = NewScheduler()
+	return Sym("ok")
+}
+
+// ============================================================================
 // REPL and File Execution
 // ============================================================================
+
+func countParens(s string) (int, int) {
+	open := 0
+	close := 0
+	inString := false
+	escaped := false
+	for _, c := range s {
+		if escaped {
+			escaped = false
+			continue
+		}
+		if c == '\\' && inString {
+			escaped = true
+			continue
+		}
+		if c == '"' {
+			inString = !inString
+			continue
+		}
+		if inString {
+			continue
+		}
+		if c == '(' {
+			open++
+		} else if c == ')' {
+			close++
+		}
+	}
+	return open, close
+}
 
 func runREPL(ev *Evaluator) {
 	scanner := bufio.NewScanner(os.Stdin)
 	fmt.Println("BoundedLISP - Type (exit) to quit")
 	fmt.Print("> ")
 
+	var accum strings.Builder
+	openCount := 0
+	closeCount := 0
+
 	for scanner.Scan() {
 		line := scanner.Text()
-		if strings.TrimSpace(line) == "(exit)" {
+		
+		if strings.TrimSpace(line) == "(exit)" && openCount == closeCount {
 			break
 		}
 
-		parser := NewParser(line)
-		exprs := parser.Parse()
+		accum.WriteString(line)
+		accum.WriteString("\n")
+		
+		o, c := countParens(line)
+		openCount += o
+		closeCount += c
 
-		for _, expr := range exprs {
-			result := ev.Eval(expr, nil)
-			if result.Type != TypeNil {
-				fmt.Println(result.String())
+		// If parens are balanced and we have something, evaluate
+		if openCount > 0 && openCount == closeCount {
+			input := accum.String()
+			accum.Reset()
+			openCount = 0
+			closeCount = 0
+
+			parser := NewParser(input)
+			exprs := parser.Parse()
+
+			for _, expr := range exprs {
+				result := ev.Eval(expr, nil)
+				if result.Type != TypeNil {
+					fmt.Println(result.String())
+				}
 			}
+			fmt.Print("> ")
+		} else if openCount > closeCount {
+			// Need more input
+			fmt.Print("  ")
+		} else {
+			// Unbalanced or empty line
+			fmt.Print("> ")
 		}
-
-		fmt.Print("> ")
 	}
 }
 
