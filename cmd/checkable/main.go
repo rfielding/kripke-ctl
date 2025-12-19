@@ -2,10 +2,17 @@ package main
 
 import (
 	"bufio"
+	"bytes"
+	"encoding/json"
 	"fmt"
+	"io"
+	"math"
+	"net/http"
 	"os"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 	"unicode"
 )
 
@@ -678,6 +685,20 @@ func (ev *Evaluator) setupBuiltins() {
 	env.Set("/", Value{Type: TypeBuiltin, Builtin: builtinDiv})
 	env.Set("mod", Value{Type: TypeBuiltin, Builtin: builtinMod})
 
+	// Math functions
+	env.Set("ln", Value{Type: TypeBuiltin, Builtin: builtinLn})
+	env.Set("log", Value{Type: TypeBuiltin, Builtin: builtinLn}) // alias
+	env.Set("exp", Value{Type: TypeBuiltin, Builtin: builtinExp})
+	env.Set("sqrt", Value{Type: TypeBuiltin, Builtin: builtinSqrt})
+	env.Set("pow", Value{Type: TypeBuiltin, Builtin: builtinPow})
+	env.Set("sin", Value{Type: TypeBuiltin, Builtin: builtinSin})
+	env.Set("cos", Value{Type: TypeBuiltin, Builtin: builtinCos})
+	env.Set("floor", Value{Type: TypeBuiltin, Builtin: builtinFloor})
+	env.Set("ceil", Value{Type: TypeBuiltin, Builtin: builtinCeil})
+	env.Set("abs", Value{Type: TypeBuiltin, Builtin: builtinAbs})
+	env.Set("min", Value{Type: TypeBuiltin, Builtin: builtinMin})
+	env.Set("max", Value{Type: TypeBuiltin, Builtin: builtinMax})
+
 	// Comparison
 	env.Set("=", Value{Type: TypeBuiltin, Builtin: builtinEq})
 	env.Set("!=", Value{Type: TypeBuiltin, Builtin: builtinNeq})
@@ -1241,6 +1262,96 @@ func builtinMod(ev *Evaluator, args []Value, env *Env) Value {
 		return Num(0)
 	}
 	return Num(float64(int64(args[0].Number) % int64(args[1].Number)))
+}
+
+// Math functions
+func builtinLn(ev *Evaluator, args []Value, env *Env) Value {
+	if len(args) < 1 || args[0].Type != TypeNumber {
+		return Num(0)
+	}
+	return Num(math.Log(args[0].Number))
+}
+
+func builtinExp(ev *Evaluator, args []Value, env *Env) Value {
+	if len(args) < 1 || args[0].Type != TypeNumber {
+		return Num(0)
+	}
+	return Num(math.Exp(args[0].Number))
+}
+
+func builtinSqrt(ev *Evaluator, args []Value, env *Env) Value {
+	if len(args) < 1 || args[0].Type != TypeNumber {
+		return Num(0)
+	}
+	return Num(math.Sqrt(args[0].Number))
+}
+
+func builtinPow(ev *Evaluator, args []Value, env *Env) Value {
+	if len(args) < 2 {
+		return Num(0)
+	}
+	return Num(math.Pow(args[0].Number, args[1].Number))
+}
+
+func builtinSin(ev *Evaluator, args []Value, env *Env) Value {
+	if len(args) < 1 || args[0].Type != TypeNumber {
+		return Num(0)
+	}
+	return Num(math.Sin(args[0].Number))
+}
+
+func builtinCos(ev *Evaluator, args []Value, env *Env) Value {
+	if len(args) < 1 || args[0].Type != TypeNumber {
+		return Num(0)
+	}
+	return Num(math.Cos(args[0].Number))
+}
+
+func builtinFloor(ev *Evaluator, args []Value, env *Env) Value {
+	if len(args) < 1 || args[0].Type != TypeNumber {
+		return Num(0)
+	}
+	return Num(math.Floor(args[0].Number))
+}
+
+func builtinCeil(ev *Evaluator, args []Value, env *Env) Value {
+	if len(args) < 1 || args[0].Type != TypeNumber {
+		return Num(0)
+	}
+	return Num(math.Ceil(args[0].Number))
+}
+
+func builtinAbs(ev *Evaluator, args []Value, env *Env) Value {
+	if len(args) < 1 || args[0].Type != TypeNumber {
+		return Num(0)
+	}
+	return Num(math.Abs(args[0].Number))
+}
+
+func builtinMin(ev *Evaluator, args []Value, env *Env) Value {
+	if len(args) < 1 {
+		return Num(0)
+	}
+	min := args[0].Number
+	for _, a := range args[1:] {
+		if a.Type == TypeNumber && a.Number < min {
+			min = a.Number
+		}
+	}
+	return Num(min)
+}
+
+func builtinMax(ev *Evaluator, args []Value, env *Env) Value {
+	if len(args) < 1 {
+		return Num(0)
+	}
+	max := args[0].Number
+	for _, a := range args[1:] {
+		if a.Type == TypeNumber && a.Number > max {
+			max = a.Number
+		}
+	}
+	return Num(max)
 }
 
 func builtinEq(ev *Evaluator, args []Value, env *Env) Value {
@@ -2364,8 +2475,884 @@ func main() {
 	ev := NewEvaluator(64) // 64 frame call stack limit
 
 	if len(os.Args) > 1 {
-		runFile(ev, os.Args[1])
+		if os.Args[1] == "-repl" {
+			runREPL(ev)
+		} else {
+			// File mode - run a .lisp file
+			runFile(ev, os.Args[1])
+		}
 	} else {
-		runREPL(ev)
+		// Default: web server mode
+		port := os.Getenv("KRIPKE_PORT")
+		if port == "" {
+			port = "8080"
+		}
+		runServer(ev, port)
 	}
 }
+
+// ============================================================================
+// Web Server for Requirements Chat
+// ============================================================================
+
+type Session struct {
+	ID           string
+	Messages     []ChatMessage
+	Versions     []DocVersion
+	CurrentDoc   string
+	CreatedAt    time.Time
+	mu           sync.Mutex
+}
+
+type ChatMessage struct {
+	Role    string `json:"role"`
+	Content string `json:"content"`
+}
+
+type DocVersion struct {
+	Version   int       `json:"version"`
+	Content   string    `json:"content"`
+	Timestamp time.Time `json:"timestamp"`
+	Summary   string    `json:"summary"`
+}
+
+var (
+	sessions   = make(map[string]*Session)
+	sessionsMu sync.RWMutex
+)
+
+func getOrCreateSession(id string) *Session {
+	sessionsMu.Lock()
+	defer sessionsMu.Unlock()
+	
+	if sess, ok := sessions[id]; ok {
+		return sess
+	}
+	
+	sess := &Session{
+		ID:         id,
+		Messages:   []ChatMessage{},
+		Versions:   []DocVersion{},
+		CurrentDoc: "",
+		CreatedAt:  time.Now(),
+	}
+	sessions[id] = sess
+	return sess
+}
+
+func runServer(ev *Evaluator, port string) {
+	// Load LISP modules
+	loadLispModules(ev)
+	
+	http.HandleFunc("/", handleIndex)
+	http.HandleFunc("/chat", handleChat)
+	http.HandleFunc("/versions", handleVersions)
+	http.HandleFunc("/version/", handleGetVersion)
+	http.HandleFunc("/eval", handleEval(ev))
+	http.HandleFunc("/diagram", handleDiagram(ev))
+	
+	// Check for API keys
+	hasAnthropic := os.Getenv("ANTHROPIC_API_KEY") != ""
+	hasOpenAI := os.Getenv("OPENAI_API_KEY") != ""
+	
+	fmt.Println("╔════════════════════════════════════════════════════════════╗")
+	fmt.Println("║          BoundedLISP Requirements Server                   ║")
+	fmt.Println("╠════════════════════════════════════════════════════════════╣")
+	fmt.Printf("║  Server: http://localhost:%-33s║\n", port)
+	fmt.Println("╠════════════════════════════════════════════════════════════╣")
+	if hasAnthropic {
+		fmt.Println("║  ✓ ANTHROPIC_API_KEY set                                   ║")
+	} else {
+		fmt.Println("║  ✗ ANTHROPIC_API_KEY not set                               ║")
+	}
+	if hasOpenAI {
+		fmt.Println("║  ✓ OPENAI_API_KEY set                                      ║")
+	} else {
+		fmt.Println("║  ✗ OPENAI_API_KEY not set                                  ║")
+	}
+	if !hasAnthropic && !hasOpenAI {
+		fmt.Println("╠════════════════════════════════════════════════════════════╣")
+		fmt.Println("║  ⚠ Set at least one API key to enable chat                 ║")
+	}
+	fmt.Println("╚════════════════════════════════════════════════════════════╝")
+	
+	if err := http.ListenAndServe(":"+port, nil); err != nil {
+		fmt.Fprintf(os.Stderr, "Server error: %v\n", err)
+		os.Exit(1)
+	}
+}
+
+func loadLispModules(ev *Evaluator) {
+	// Try to load standard modules
+	modules := []string{"prologue.lisp", "kripke.lisp", "visualize.lisp", "projection.lisp", "distributions.lisp"}
+	for _, mod := range modules {
+		if content, err := os.ReadFile(mod); err == nil {
+			parser := NewParser(string(content))
+			for _, expr := range parser.Parse() {
+				ev.Eval(expr, nil)
+			}
+		}
+	}
+}
+
+const systemPrompt = `You are a requirements engineer helping users specify multi-party protocols and systems using BoundedLISP.
+
+Your goal is to iteratively refine requirements through conversation, producing a formal specification in LISP.
+
+## Your Process:
+1. Ask clarifying questions about the user's needs
+2. Identify the actors/roles involved
+3. Understand the message flows and states
+4. Identify success and failure conditions
+5. Generate a grammar specification
+
+## Output Format:
+After each exchange, provide an updated markdown document with:
+1. **Summary** - Plain English description
+2. **Actors** - The roles involved  
+3. **States** - The protocol states
+4. **Messages** - What gets exchanged
+5. **Properties** - What must be true (CTL formulas)
+6. **Specification** - The LISP code
+
+## LISP Grammar Syntax:
+` + "```lisp" + `
+(defgrammar 'protocol-name
+  '(StateName (Sender -> Receiver : message-type) -> NextState)
+  '(StateName 
+    (Sender -> Receiver : option1) -> State1
+    (Sender -> Receiver : option2) -> State2)
+  '(TerminalState))
+` + "```" + `
+
+## CTL Properties:
+` + "```lisp" + `
+(defproperty 'name (AF (prop 'in_Complete)))  ; Eventually completes
+(defproperty 'name (AG (ctl-implies (prop 'x) (AF (prop 'y)))))  ; x leads to y
+` + "```" + `
+
+## Guidelines:
+- Start simple, add complexity incrementally
+- Validate understanding before adding details
+- Show state diagrams using Mermaid after each update
+- Keep the conversation focused and productive
+- When the spec is complete, say "SPECIFICATION COMPLETE" 
+
+Always wrap your updated specification in a markdown code fence.`
+
+func handleIndex(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/html")
+	w.Write([]byte(indexHTML))
+}
+
+func handleChat(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, "POST required", http.StatusMethodNotAllowed)
+		return
+	}
+	
+	var req struct {
+		SessionID string `json:"session_id"`
+		Message   string `json:"message"`
+		Provider  string `json:"provider"` // "anthropic" or "openai"
+	}
+	
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	
+	// Get API key from environment
+	var apiKey string
+	if req.Provider == "openai" {
+		apiKey = os.Getenv("OPENAI_API_KEY")
+	} else {
+		apiKey = os.Getenv("ANTHROPIC_API_KEY")
+	}
+	
+	if apiKey == "" {
+		http.Error(w, "API key not set in environment. Set ANTHROPIC_API_KEY or OPENAI_API_KEY", http.StatusBadRequest)
+		return
+	}
+	
+	sess := getOrCreateSession(req.SessionID)
+	sess.mu.Lock()
+	defer sess.mu.Unlock()
+	
+	// Add user message
+	sess.Messages = append(sess.Messages, ChatMessage{Role: "user", Content: req.Message})
+	
+	// Call LLM
+	var response string
+	var err error
+	
+	if req.Provider == "openai" {
+		response, err = callOpenAI(apiKey, sess.Messages)
+	} else {
+		response, err = callAnthropic(apiKey, sess.Messages)
+	}
+	
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	
+	// Add assistant message
+	sess.Messages = append(sess.Messages, ChatMessage{Role: "assistant", Content: response})
+	
+	// Extract and version any specification
+	if spec := extractSpec(response); spec != "" {
+		if spec != sess.CurrentDoc {
+			sess.Versions = append(sess.Versions, DocVersion{
+				Version:   len(sess.Versions) + 1,
+				Content:   spec,
+				Timestamp: time.Now(),
+				Summary:   extractSummary(spec),
+			})
+			sess.CurrentDoc = spec
+		}
+	}
+	
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"response":    response,
+		"version":     len(sess.Versions),
+		"current_doc": sess.CurrentDoc,
+	})
+}
+
+func callAnthropic(apiKey string, messages []ChatMessage) (string, error) {
+	if apiKey == "" {
+		return "", fmt.Errorf("API key required")
+	}
+	
+	// Build messages array
+	msgs := make([]map[string]string, len(messages))
+	for i, m := range messages {
+		msgs[i] = map[string]string{"role": m.Role, "content": m.Content}
+	}
+	
+	reqBody := map[string]interface{}{
+		"model":      "claude-sonnet-4-20250514",
+		"max_tokens": 4096,
+		"system":     systemPrompt,
+		"messages":   msgs,
+	}
+	
+	body, _ := json.Marshal(reqBody)
+	req, _ := http.NewRequest("POST", "https://api.anthropic.com/v1/messages", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("x-api-key", apiKey)
+	req.Header.Set("anthropic-version", "2023-06-01")
+	
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	
+	respBody, _ := io.ReadAll(resp.Body)
+	
+	if resp.StatusCode != 200 {
+		return "", fmt.Errorf("API error: %s", string(respBody))
+	}
+	
+	var result struct {
+		Content []struct {
+			Text string `json:"text"`
+		} `json:"content"`
+	}
+	json.Unmarshal(respBody, &result)
+	
+	if len(result.Content) > 0 {
+		return result.Content[0].Text, nil
+	}
+	return "", fmt.Errorf("empty response")
+}
+
+func callOpenAI(apiKey string, messages []ChatMessage) (string, error) {
+	if apiKey == "" {
+		return "", fmt.Errorf("API key required")
+	}
+	
+	// Build messages with system prompt
+	msgs := []map[string]string{{"role": "system", "content": systemPrompt}}
+	for _, m := range messages {
+		msgs = append(msgs, map[string]string{"role": m.Role, "content": m.Content})
+	}
+	
+	reqBody := map[string]interface{}{
+		"model":      "gpt-4o",
+		"max_tokens": 4096,
+		"messages":   msgs,
+	}
+	
+	body, _ := json.Marshal(reqBody)
+	req, _ := http.NewRequest("POST", "https://api.openai.com/v1/chat/completions", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+	
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	
+	respBody, _ := io.ReadAll(resp.Body)
+	
+	if resp.StatusCode != 200 {
+		return "", fmt.Errorf("API error: %s", string(respBody))
+	}
+	
+	var result struct {
+		Choices []struct {
+			Message struct {
+				Content string `json:"content"`
+			} `json:"message"`
+		} `json:"choices"`
+	}
+	json.Unmarshal(respBody, &result)
+	
+	if len(result.Choices) > 0 {
+		return result.Choices[0].Message.Content, nil
+	}
+	return "", fmt.Errorf("empty response")
+}
+
+func extractSpec(response string) string {
+	// Look for markdown code blocks with lisp
+	lines := strings.Split(response, "\n")
+	var spec strings.Builder
+	inBlock := false
+	
+	for _, line := range lines {
+		if strings.HasPrefix(line, "```lisp") || strings.HasPrefix(line, "```scheme") {
+			inBlock = true
+			continue
+		}
+		if inBlock && strings.HasPrefix(line, "```") {
+			inBlock = false
+			spec.WriteString("\n")
+			continue
+		}
+		if inBlock {
+			spec.WriteString(line)
+			spec.WriteString("\n")
+		}
+	}
+	
+	return strings.TrimSpace(spec.String())
+}
+
+func extractSummary(spec string) string {
+	// Extract grammar name as summary
+	if idx := strings.Index(spec, "defgrammar"); idx >= 0 {
+		rest := spec[idx:]
+		if start := strings.Index(rest, "'"); start >= 0 {
+			end := strings.IndexAny(rest[start+1:], " \n\t)")
+			if end > 0 {
+				return rest[start+1 : start+1+end]
+			}
+		}
+	}
+	return "Draft"
+}
+
+func handleVersions(w http.ResponseWriter, r *http.Request) {
+	sessionID := r.URL.Query().Get("session_id")
+	sess := getOrCreateSession(sessionID)
+	
+	sess.mu.Lock()
+	defer sess.mu.Unlock()
+	
+	json.NewEncoder(w).Encode(sess.Versions)
+}
+
+func handleGetVersion(w http.ResponseWriter, r *http.Request) {
+	parts := strings.Split(r.URL.Path, "/")
+	if len(parts) < 3 {
+		http.Error(w, "version number required", http.StatusBadRequest)
+		return
+	}
+	
+	versionNum, err := strconv.Atoi(parts[2])
+	if err != nil {
+		http.Error(w, "invalid version", http.StatusBadRequest)
+		return
+	}
+	
+	sessionID := r.URL.Query().Get("session_id")
+	sess := getOrCreateSession(sessionID)
+	
+	sess.mu.Lock()
+	defer sess.mu.Unlock()
+	
+	if versionNum < 1 || versionNum > len(sess.Versions) {
+		http.Error(w, "version not found", http.StatusNotFound)
+		return
+	}
+	
+	json.NewEncoder(w).Encode(sess.Versions[versionNum-1])
+}
+
+func handleEval(ev *Evaluator) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Code string `json:"code"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		
+		parser := NewParser(req.Code)
+		exprs := parser.Parse()
+		
+		var results []string
+		for _, expr := range exprs {
+			result := ev.Eval(expr, nil)
+			results = append(results, result.String())
+		}
+		
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"results": results,
+		})
+	}
+}
+
+func handleDiagram(ev *Evaluator) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		grammarName := r.URL.Query().Get("grammar")
+		diagramType := r.URL.Query().Get("type")
+		if diagramType == "" {
+			diagramType = "state"
+		}
+		
+		var code string
+		switch diagramType {
+		case "state":
+			code = fmt.Sprintf("(grammar->state-diagram '%s)", grammarName)
+		case "sequence":
+			code = fmt.Sprintf("(grammar->sequence '%s)", grammarName)
+		case "flowchart":
+			code = fmt.Sprintf("(grammar->flowchart '%s)", grammarName)
+		default:
+			http.Error(w, "unknown diagram type", http.StatusBadRequest)
+			return
+		}
+		
+		parser := NewParser(code)
+		exprs := parser.Parse()
+		
+		var result string
+		for _, expr := range exprs {
+			r := ev.Eval(expr, nil)
+			if r.Type == TypeString {
+				result = r.Str
+			}
+		}
+		
+		w.Header().Set("Content-Type", "text/plain")
+		w.Write([]byte(result))
+	}
+}
+
+const indexHTML = `<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BoundedLISP Requirements</title>
+    <script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { 
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #1a1a2e; color: #eee; 
+            display: flex; height: 100vh;
+        }
+        .sidebar {
+            width: 220px; background: #16213e; padding: 1rem;
+            border-right: 1px solid #0f3460; overflow-y: auto;
+            display: flex; flex-direction: column;
+        }
+        .sidebar h2 { font-size: 0.9rem; margin-bottom: 0.75rem; color: #e94560; text-transform: uppercase; letter-spacing: 1px; }
+        .version-list { flex: 1; overflow-y: auto; }
+        .version-item {
+            padding: 0.5rem 0.75rem; margin: 0.25rem 0; background: #0f3460;
+            border-radius: 4px; cursor: pointer; font-size: 0.8rem;
+        }
+        .version-item:hover { background: #1a4a7a; }
+        .version-item.active { border-left: 3px solid #e94560; background: #1a4a7a; }
+        .version-item small { color: #888; }
+        .main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+        .header {
+            padding: 0.75rem 1rem; background: #16213e; border-bottom: 1px solid #0f3460;
+            display: flex; gap: 1rem; align-items: center;
+        }
+        .header select {
+            padding: 0.5rem; border: 1px solid #0f3460; border-radius: 4px;
+            background: #1a1a2e; color: #eee;
+        }
+        .header .title { font-weight: bold; color: #e94560; }
+        .header .spacer { flex: 1; }
+        .btn {
+            padding: 0.5rem 1rem; background: #0f3460; border: none;
+            border-radius: 4px; color: #eee; cursor: pointer; font-size: 0.85rem;
+        }
+        .btn:hover { background: #1a4a7a; }
+        .btn.primary { background: #e94560; }
+        .btn.primary:hover { background: #ff6b6b; }
+        .content { flex: 1; display: flex; overflow: hidden; }
+        
+        /* Chat Panel */
+        .chat-panel { 
+            width: 45%; min-width: 350px; display: flex; flex-direction: column; 
+            border-right: 1px solid #0f3460; 
+        }
+        .messages { flex: 1; overflow-y: auto; padding: 1rem; }
+        .message { margin: 0.75rem 0; padding: 0.75rem 1rem; border-radius: 8px; }
+        .message.user { background: #0f3460; margin-left: 15%; }
+        .message.assistant { background: #1e1e3a; margin-right: 5%; border-left: 3px solid #e94560; }
+        .message p { margin: 0.5rem 0; line-height: 1.5; }
+        .message pre { background: #0a0a15; padding: 0.75rem; border-radius: 4px; overflow-x: auto; margin: 0.75rem 0; }
+        .message code { font-family: 'Fira Code', 'Consolas', monospace; font-size: 0.85rem; }
+        .message ul, .message ol { margin: 0.5rem 0 0.5rem 1.5rem; }
+        .message h1, .message h2, .message h3 { color: #e94560; margin: 1rem 0 0.5rem; }
+        .input-area { padding: 1rem; background: #16213e; display: flex; gap: 0.5rem; }
+        .input-area textarea { 
+            flex: 1; padding: 0.75rem; border: 1px solid #0f3460; border-radius: 4px;
+            background: #1a1a2e; color: #eee; resize: none; font-family: inherit;
+            font-size: 0.95rem; line-height: 1.4;
+        }
+        .input-area textarea:focus { outline: none; border-color: #e94560; }
+        
+        /* Document Panel */
+        .doc-panel { 
+            flex: 1; display: flex; flex-direction: column; 
+            background: #0d0d1a; min-width: 0;
+        }
+        .doc-tabs { 
+            display: flex; gap: 0; background: #16213e; 
+            border-bottom: 1px solid #0f3460;
+        }
+        .doc-tab { 
+            padding: 0.75rem 1.25rem; cursor: pointer; 
+            border-bottom: 2px solid transparent;
+            font-size: 0.85rem; color: #aaa;
+        }
+        .doc-tab:hover { color: #eee; }
+        .doc-tab.active { color: #e94560; border-bottom-color: #e94560; }
+        .doc-frame { 
+            flex: 1; overflow: hidden; background: #fff;
+        }
+        .doc-frame iframe {
+            width: 100%; height: 100%; border: none;
+        }
+        .doc-content {
+            flex: 1; overflow-y: auto; padding: 1.5rem;
+            background: #0d0d1a;
+        }
+        .doc-content.markdown-body {
+            background: #fff; color: #24292e;
+        }
+        .doc-content.markdown-body h1 { border-bottom: 1px solid #eee; padding-bottom: 0.3em; }
+        .doc-content.markdown-body h2 { border-bottom: 1px solid #eee; padding-bottom: 0.3em; }
+        .doc-content.markdown-body pre { background: #f6f8fa; padding: 1rem; border-radius: 6px; }
+        .doc-content.markdown-body code { font-family: 'Fira Code', monospace; }
+        .doc-content.markdown-body .mermaid { margin: 1rem 0; }
+        .doc-content.code-view pre { 
+            background: #1a1a2e; color: #eee; padding: 1rem; 
+            border-radius: 4px; margin: 0; font-size: 0.9rem;
+            white-space: pre-wrap; word-wrap: break-word;
+        }
+        
+        /* Empty state */
+        .empty-state {
+            display: flex; align-items: center; justify-content: center;
+            height: 100%; color: #666; font-style: italic;
+        }
+    </style>
+</head>
+<body>
+    <div class="sidebar">
+        <h2>📋 Versions</h2>
+        <div class="version-list" id="versions">
+            <div class="empty-state" style="font-size: 0.8rem;">No versions yet</div>
+        </div>
+        <button class="btn" onclick="newSession()" style="margin-top: 1rem; width: 100%;">+ New Session</button>
+    </div>
+    <div class="main">
+        <div class="header">
+            <span class="title">🔷 BoundedLISP Requirements</span>
+            <span class="spacer"></span>
+            <select id="provider">
+                <option value="anthropic">Claude (Anthropic)</option>
+                <option value="openai">GPT-4 (OpenAI)</option>
+            </select>
+            <button class="btn" onclick="exportSpec()">📄 Export</button>
+        </div>
+        <div class="content">
+            <div class="chat-panel">
+                <div class="messages" id="messages">
+                    <div class="message assistant">
+                        <p>👋 Hi! I'm here to help you specify a multi-party protocol or distributed system.</p>
+                        <p>Describe what you're trying to build, and I'll help you refine the requirements into a formal specification with state diagrams.</p>
+                        <p><strong>Examples:</strong></p>
+                        <ul>
+                            <li>"I need a payment protocol between buyer, seller, and escrow"</li>
+                            <li>"Design a document approval workflow"</li>
+                            <li>"Create a simple request-response API"</li>
+                        </ul>
+                    </div>
+                </div>
+                <div class="input-area">
+                    <textarea id="input" rows="3" placeholder="Describe your system or ask a question..."></textarea>
+                    <button class="btn primary" onclick="sendMessage()">Send</button>
+                </div>
+            </div>
+            <div class="doc-panel">
+                <div class="doc-tabs">
+                    <div class="doc-tab active" onclick="showTab('rendered')">📖 Document</div>
+                    <div class="doc-tab" onclick="showTab('code')">💻 LISP Code</div>
+                    <div class="doc-tab" onclick="showTab('diagram')">📊 Diagram</div>
+                </div>
+                <div class="doc-content" id="docContent">
+                    <div class="empty-state">Specification will appear here as we develop it...</div>
+                </div>
+            </div>
+        </div>
+    </div>
+    <script>
+        mermaid.initialize({ startOnLoad: false, theme: 'default' });
+        marked.setOptions({ gfm: true, breaks: true });
+        
+        let sessionId = 'session-' + Date.now();
+        let currentTab = 'rendered';
+        let currentDoc = '';
+        let fullResponse = '';
+        
+        function newSession() {
+            if (currentDoc && !confirm('Start a new session? Current work will be cleared.')) return;
+            sessionId = 'session-' + Date.now();
+            document.getElementById('messages').innerHTML = ` + "`" + `
+                <div class="message assistant">
+                    <p>👋 Hi! I'm here to help you specify a multi-party protocol or distributed system.</p>
+                    <p>Describe what you're trying to build, and I'll help you refine the requirements into a formal specification.</p>
+                </div>
+            ` + "`" + `;
+            document.getElementById('versions').innerHTML = '<div class="empty-state" style="font-size: 0.8rem;">No versions yet</div>';
+            document.getElementById('docContent').innerHTML = '<div class="empty-state">Specification will appear here...</div>';
+            currentDoc = '';
+            fullResponse = '';
+        }
+        
+        async function sendMessage() {
+            const input = document.getElementById('input');
+            const message = input.value.trim();
+            if (!message) return;
+            
+            const provider = document.getElementById('provider').value;
+            
+            addMessage('user', message);
+            input.value = '';
+            
+            // Show loading
+            const loadingDiv = document.createElement('div');
+            loadingDiv.className = 'message assistant';
+            loadingDiv.innerHTML = '<p><em>Thinking...</em></p>';
+            loadingDiv.id = 'loading';
+            document.getElementById('messages').appendChild(loadingDiv);
+            loadingDiv.scrollIntoView({ behavior: 'smooth' });
+            
+            try {
+                const resp = await fetch('/chat', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        session_id: sessionId,
+                        message: message,
+                        provider: provider
+                    })
+                });
+                
+                document.getElementById('loading')?.remove();
+                
+                if (!resp.ok) {
+                    const err = await resp.text();
+                    throw new Error(err);
+                }
+                
+                const data = await resp.json();
+                
+                addMessage('assistant', data.response);
+                fullResponse = data.response;
+                
+                if (data.current_doc) {
+                    currentDoc = data.current_doc;
+                    updateDocPanel();
+                    loadVersions();
+                }
+            } catch (err) {
+                document.getElementById('loading')?.remove();
+                addMessage('assistant', '❌ Error: ' + err.message);
+            }
+        }
+        
+        function addMessage(role, content) {
+            const div = document.createElement('div');
+            div.className = 'message ' + role;
+            div.innerHTML = marked.parse(content);
+            document.getElementById('messages').appendChild(div);
+            div.scrollIntoView({ behavior: 'smooth' });
+            
+            // Render mermaid in chat
+            setTimeout(() => {
+                div.querySelectorAll('pre code.language-mermaid').forEach((el, i) => {
+                    const container = document.createElement('div');
+                    container.className = 'mermaid';
+                    container.id = 'mermaid-chat-' + Date.now() + '-' + i;
+                    container.textContent = el.textContent;
+                    el.parentElement.replaceWith(container);
+                });
+                mermaid.run();
+            }, 100);
+        }
+        
+        async function loadVersions() {
+            const resp = await fetch('/versions?session_id=' + sessionId);
+            const versions = await resp.json();
+            
+            const container = document.getElementById('versions');
+            if (!versions || versions.length === 0) {
+                container.innerHTML = '<div class="empty-state" style="font-size: 0.8rem;">No versions yet</div>';
+                return;
+            }
+            
+            container.innerHTML = versions.map((v, i) => 
+                ` + "`" + `<div class="version-item ${i === versions.length - 1 ? 'active' : ''}" onclick="loadVersion(${v.version})">
+                    <strong>v${v.version}</strong> - ${v.summary || 'Draft'}
+                    <br><small>${new Date(v.timestamp).toLocaleTimeString()}</small>
+                </div>` + "`" + `
+            ).join('');
+        }
+        
+        async function loadVersion(num) {
+            const resp = await fetch('/version/' + num + '?session_id=' + sessionId);
+            const version = await resp.json();
+            currentDoc = version.content;
+            updateDocPanel();
+            
+            // Update active state
+            document.querySelectorAll('.version-item').forEach(el => el.classList.remove('active'));
+            event.target.closest('.version-item').classList.add('active');
+        }
+        
+        function updateDocPanel() {
+            const container = document.getElementById('docContent');
+            
+            if (!currentDoc && !fullResponse) {
+                container.innerHTML = '<div class="empty-state">Specification will appear here...</div>';
+                container.className = 'doc-content';
+                return;
+            }
+            
+            if (currentTab === 'rendered') {
+                // Render the full response as markdown
+                container.className = 'doc-content markdown-body';
+                container.innerHTML = marked.parse(fullResponse || '# Specification\n\n` + "```" + `lisp\n' + currentDoc + '\n` + "```" + `');
+                
+                // Render mermaid diagrams
+                setTimeout(() => {
+                    container.querySelectorAll('pre code.language-mermaid').forEach((el, i) => {
+                        const wrapper = document.createElement('div');
+                        wrapper.className = 'mermaid';
+                        wrapper.id = 'mermaid-doc-' + Date.now() + '-' + i;
+                        wrapper.textContent = el.textContent;
+                        el.parentElement.replaceWith(wrapper);
+                    });
+                    mermaid.run();
+                }, 100);
+                
+            } else if (currentTab === 'code') {
+                container.className = 'doc-content code-view';
+                container.innerHTML = '<pre><code>' + escapeHtml(currentDoc) + '</code></pre>';
+                
+            } else if (currentTab === 'diagram') {
+                container.className = 'doc-content markdown-body';
+                const diagram = generateStateDiagram(currentDoc);
+                container.innerHTML = '<div class="mermaid" id="main-diagram">' + diagram + '</div>';
+                setTimeout(() => mermaid.run(), 100);
+            }
+        }
+        
+        function generateStateDiagram(code) {
+            const lines = ['stateDiagram-v2'];
+            const transitions = [];
+            const terminals = new Set();
+            
+            // Find transitions: (StateName (A -> B : msg) -> NextState)
+            const transRe = /\((\w+)\s+\((\w+)\s*->\s*(\w+)\s*:\s*(\w+)\)\s*->\s*(\w+)\)/g;
+            let match;
+            while ((match = transRe.exec(code)) !== null) {
+                transitions.push({ from: match[1], to: match[5], msg: match[4] });
+            }
+            
+            // Find terminal states: '(StateName))
+            const termRe = /'\((\w+)\)\)/g;
+            while ((match = termRe.exec(code)) !== null) {
+                terminals.add(match[1]);
+            }
+            
+            if (transitions.length === 0) {
+                return 'stateDiagram-v2\n    note "No grammar defined yet"';
+            }
+            
+            lines.push('    [*] --> ' + transitions[0].from);
+            
+            for (const t of transitions) {
+                lines.push('    ' + t.from + ' --> ' + t.to + ' : ' + t.msg);
+            }
+            
+            for (const t of terminals) {
+                lines.push('    ' + t + ' --> [*]');
+            }
+            
+            return lines.join('\n');
+        }
+        
+        function showTab(tab) {
+            currentTab = tab;
+            document.querySelectorAll('.doc-tab').forEach(t => t.classList.remove('active'));
+            event.target.classList.add('active');
+            updateDocPanel();
+        }
+        
+        function exportSpec() {
+            if (!currentDoc) {
+                alert('No specification to export yet');
+                return;
+            }
+            const blob = new Blob([currentDoc], { type: 'text/plain' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'specification.lisp';
+            a.click();
+            URL.revokeObjectURL(url);
+        }
+        
+        function escapeHtml(text) {
+            return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        }
+        
+        // Handle enter key
+        document.getElementById('input').addEventListener('keydown', e => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                sendMessage();
+            }
+        });
+    </script>
+</body>
+</html>`
