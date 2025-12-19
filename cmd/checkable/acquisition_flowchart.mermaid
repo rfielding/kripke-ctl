@@ -1,0 +1,18 @@
+flowchart TD
+    Start((Start))
+    Negotiation[Negotiation]
+    Regulatory[Regulatory]
+    Review[Review]
+    Closing[Closing]
+    Transfer[Transfer]
+    Complete([Complete])
+    Failed([Failed])
+    
+    Start -->|offer| Negotiation
+    Negotiation -->|accept| Regulatory
+    Negotiation -->|reject| Failed
+    Regulatory -->|filing| Review
+    Review -->|approved| Closing
+    Review -->|denied| Failed
+    Closing -->|payment| Transfer
+    Transfer -->|assets| Complete
