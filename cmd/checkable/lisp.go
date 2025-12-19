@@ -939,7 +939,7 @@ func (ev *Evaluator) evalStep(expr Value, env *Env) Value {
 				if len(expr.List) < 3 {
 					return Nil()
 				}
-				// (define name value) or (define (name args...) body)
+				// (define name value) or (define (name args...) body...)
 				if expr.List[1].IsList() {
 					// Function shorthand
 					sig := expr.List[1].List
@@ -960,10 +960,21 @@ func (ev *Evaluator) evalStep(expr Value, env *Env) Value {
 							params = append(params, p.Symbol)
 						}
 					}
+					// Handle multi-expression body: wrap in implicit begin
+					var body Value
+					if len(expr.List) == 3 {
+						body = expr.List[2]
+					} else {
+						// Multiple body expressions - wrap in begin
+						bodyExprs := make([]Value, len(expr.List)-2+1)
+						bodyExprs[0] = Sym("begin")
+						copy(bodyExprs[1:], expr.List[2:])
+						body = Lst(bodyExprs...)
+					}
 					fn := &Function{
 						Params:    params,
 						RestParam: restParam,
-						Body:      expr.List[2],
+						Body:      body,
 						Env:       env,
 					}
 					val := Value{Type: TypeFunc, Func: fn}
@@ -998,12 +1009,22 @@ func (ev *Evaluator) evalStep(expr Value, env *Env) Value {
 						}
 					}
 				}
+				// Handle multi-expression body
+				var body Value
+				if len(expr.List) == 3 {
+					body = expr.List[2]
+				} else {
+					bodyExprs := make([]Value, len(expr.List)-2+1)
+					bodyExprs[0] = Sym("begin")
+					copy(bodyExprs[1:], expr.List[2:])
+					body = Lst(bodyExprs...)
+				}
 				return Value{
 					Type: TypeFunc,
 					Func: &Function{
 						Params:    params,
 						RestParam: restParam,
-						Body:      expr.List[2],
+						Body:      body,
 						Env:       env,
 					},
 				}
