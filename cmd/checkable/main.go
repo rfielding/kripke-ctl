@@ -920,8 +920,15 @@ func (ev *Evaluator) evalStep(expr Value, env *Env) Value {
 				}
 				newEnv := NewEnv(env)
 				newEnv.Set(name.Symbol, val)
-				if len(expr.List) > 3 {
+				if len(expr.List) == 4 {
+					// Single body expression
 					return ev.Eval(expr.List[3], newEnv)
+				} else if len(expr.List) > 4 {
+					// Multiple body expressions - wrap in begin
+					bodyExprs := make([]Value, len(expr.List)-3+1)
+					bodyExprs[0] = Sym("begin")
+					copy(bodyExprs[1:], expr.List[3:])
+					return ev.Eval(Lst(bodyExprs...), newEnv)
 				}
 				return val
 
@@ -940,7 +947,15 @@ func (ev *Evaluator) evalStep(expr Value, env *Env) Value {
 						}
 					}
 				}
-				return ev.Eval(expr.List[2], newEnv)
+				if len(expr.List) == 3 {
+					return ev.Eval(expr.List[2], newEnv)
+				} else {
+					// Multiple body expressions - wrap in begin
+					bodyExprs := make([]Value, len(expr.List)-2+1)
+					bodyExprs[0] = Sym("begin")
+					copy(bodyExprs[1:], expr.List[2:])
+					return ev.Eval(Lst(bodyExprs...), newEnv)
+				}
 
 			case "set!":
 				if len(expr.List) < 3 {
@@ -1358,23 +1373,36 @@ func builtinEq(ev *Evaluator, args []Value, env *Env) Value {
 	if len(args) < 2 {
 		return Bool(true)
 	}
-	a, b := args[0], args[1]
+	return Bool(valuesEqual(args[0], args[1]))
+}
+
+func valuesEqual(a, b Value) bool {
 	if a.Type != b.Type {
-		return Bool(false)
+		return false
 	}
 	switch a.Type {
 	case TypeNumber:
-		return Bool(a.Number == b.Number)
+		return a.Number == b.Number
 	case TypeString:
-		return Bool(a.Str == b.Str)
+		return a.Str == b.Str
 	case TypeSymbol:
-		return Bool(a.Symbol == b.Symbol)
+		return a.Symbol == b.Symbol
 	case TypeBool:
-		return Bool(a.Bool == b.Bool)
+		return a.Bool == b.Bool
 	case TypeNil:
-		return Bool(true)
+		return true
+	case TypeList:
+		if len(a.List) != len(b.List) {
+			return false
+		}
+		for i := range a.List {
+			if !valuesEqual(a.List[i], b.List[i]) {
+				return false
+			}
+		}
+		return true
 	}
-	return Bool(false)
+	return false
 }
 
 func builtinNeq(ev *Evaluator, args []Value, env *Env) Value {
@@ -2584,7 +2612,7 @@ func runServer(ev *Evaluator, port string) {
 
 func loadLispModules(ev *Evaluator) {
 	// Try to load standard modules
-	modules := []string{"prologue.lisp", "kripke.lisp", "visualize.lisp", "projection.lisp", "distributions.lisp"}
+	modules := []string{"prologue.lisp"}
 	for _, mod := range modules {
 		if content, err := os.ReadFile(mod); err == nil {
 			parser := NewParser(string(content))
