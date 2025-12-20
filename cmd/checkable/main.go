@@ -2623,50 +2623,109 @@ func loadLispModules(ev *Evaluator) {
 	}
 }
 
-const systemPrompt = `You are a requirements engineer helping users specify multi-party protocols and systems using BoundedLISP.
+const systemPrompt = `You are a requirements engineer helping users specify multi-party protocols using BoundedLISP.
 
-Your goal is to iteratively refine requirements through conversation, producing a formal specification in LISP.
+## Your Output Format
 
-## Your Process:
-1. Ask clarifying questions about the user's needs
-2. Identify the actors/roles involved
-3. Understand the message flows and states
-4. Identify success and failure conditions
-5. Generate a grammar specification
+ALWAYS respond with exactly THREE sections in this format:
 
-## Output Format:
-After each exchange, provide an updated markdown document with:
-1. **Summary** - Plain English description
-2. **Actors** - The roles involved  
-3. **States** - The protocol states
-4. **Messages** - What gets exchanged
-5. **Properties** - What must be true (CTL formulas)
-6. **Specification** - The LISP code
+===CHAT===
+(1-3 sentences acknowledging the user and briefly describing what you did)
 
-## LISP Grammar Syntax:
-` + "```lisp" + `
-(defgrammar 'protocol-name
-  '(StateName (Sender -> Receiver : message-type) -> NextState)
-  '(StateName 
-    (Sender -> Receiver : option1) -> State1
-    (Sender -> Receiver : option2) -> State2)
-  '(TerminalState))
+===MARKDOWN===
+(Full specification document - see structure below)
+
+===LISP===
+(The complete LISP code)
+
+## Markdown Document Structure
+
+The MARKDOWN section should be a complete, standalone document with:
+
+# Protocol Name
+
+Brief description.
+
+## Actors
+
+| Actor | Role |
+|-------|------|
+| Name | What they do |
+
+## Interaction Diagram
+
+` + "```mermaid" + `
+sequenceDiagram
+    participant A
+    participant B
+    A->>B: message
 ` + "```" + `
 
-## CTL Properties:
-` + "```lisp" + `
-(defproperty 'name (AF (prop 'in_Complete)))  ; Eventually completes
-(defproperty 'name (AG (ctl-implies (prop 'x) (AF (prop 'y)))))  ; x leads to y
+## Actor State Machines
+
+For EACH actor, show their EFSM:
+
+### Actor Name
+
+` + "```mermaid" + `
+stateDiagram-v2
+    [*] --> Initial
+    Initial --> Next: action
+    Next --> [*]
 ` + "```" + `
 
-## Guidelines:
+## Properties
+
+| Property | Description | Status |
+|----------|-------------|--------|
+| name | English description | ✓ Verified / ✗ Failed / ⏳ Pending |
+
+## Statistics (if applicable)
+
+` + "```mermaid" + `
+pie title Distribution
+    "A" : 40
+    "B" : 60
+` + "```" + `
+
+## LISP Specification
+
+` + "```lisp" + `
+(the code here)
+` + "```" + `
+
+---
+
+## BoundedLISP Actor Syntax
+
+Actors use the become pattern for state:
+
+` + "```lisp" + `
+(define (my-actor-loop state)
+  (let msg (receive!)
+    ; process message
+    (send-to! 'other-actor response)
+    (if continue?
+        (list 'become (list 'my-actor-loop new-state))
+        'done)))
+
+(spawn-actor 'my-actor 16 '(my-actor-loop initial-state))
+` + "```" + `
+
+## CTL Properties
+
+` + "```lisp" + `
+(defproperty 'always-responds 
+  (AG (ctl-implies (prop 'request) (AF (prop 'response)))))
+` + "```" + `
+
+## Guidelines
+
 - Start simple, add complexity incrementally
-- Validate understanding before adding details
-- Show state diagrams using Mermaid after each update
-- Keep the conversation focused and productive
-- When the spec is complete, say "SPECIFICATION COMPLETE" 
-
-Always wrap your updated specification in a markdown code fence.`
+- Each actor should have their own state machine
+- Show ALL diagrams in the markdown document
+- Properties should have English descriptions
+- Keep chat responses brief - the document tells the full story`
 
 func handleIndex(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html")
@@ -2728,24 +2787,74 @@ func handleChat(w http.ResponseWriter, r *http.Request) {
 	// Add assistant message
 	sess.Messages = append(sess.Messages, ChatMessage{Role: "assistant", Content: response})
 	
-	// Extract and version any specification
-	if spec := extractSpec(response); spec != "" {
-		if spec != sess.CurrentDoc {
+	// Parse the structured response
+	chatResponse, markdown, lisp := parseStructuredResponse(response)
+	
+	// Store LISP as current doc
+	if lisp != "" {
+		if lisp != sess.CurrentDoc {
 			sess.Versions = append(sess.Versions, DocVersion{
 				Version:   len(sess.Versions) + 1,
-				Content:   spec,
+				Content:   lisp,
 				Timestamp: time.Now(),
-				Summary:   extractSummary(spec),
+				Summary:   "Update",
 			})
-			sess.CurrentDoc = spec
+			sess.CurrentDoc = lisp
 		}
 	}
 	
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"response":    response,
-		"version":     len(sess.Versions),
-		"current_doc": sess.CurrentDoc,
+		"chat_response": chatResponse,
+		"markdown":      markdown,
+		"current_doc":   sess.CurrentDoc,
+		"version":       len(sess.Versions),
 	})
+}
+
+// Parse structured response with ===CHAT===, ===MARKDOWN===, ===LISP=== sections
+func parseStructuredResponse(response string) (chat, markdown, lisp string) {
+	// Default: treat entire response as chat
+	chat = response
+	
+	// Try to find sections
+	chatIdx := strings.Index(response, "===CHAT===")
+	mdIdx := strings.Index(response, "===MARKDOWN===")
+	lispIdx := strings.Index(response, "===LISP===")
+	
+	if chatIdx >= 0 && mdIdx >= 0 {
+		// Extract chat section
+		chatStart := chatIdx + len("===CHAT===")
+		chatEnd := mdIdx
+		chat = strings.TrimSpace(response[chatStart:chatEnd])
+		
+		// Extract markdown section
+		mdStart := mdIdx + len("===MARKDOWN===")
+		mdEnd := len(response)
+		if lispIdx > mdIdx {
+			mdEnd = lispIdx
+		}
+		markdown = strings.TrimSpace(response[mdStart:mdEnd])
+		
+		// Extract LISP section if present
+		if lispIdx >= 0 {
+			lispStart := lispIdx + len("===LISP===")
+			lisp = strings.TrimSpace(response[lispStart:])
+			// Clean up code fences if present
+			lisp = strings.TrimPrefix(lisp, "```lisp")
+			lisp = strings.TrimPrefix(lisp, "```")
+			lisp = strings.TrimSuffix(lisp, "```")
+			lisp = strings.TrimSpace(lisp)
+		}
+	} else {
+		// Fallback: try to extract LISP from code blocks
+		if spec := extractSpec(response); spec != "" {
+			lisp = spec
+		}
+		// Use full response as both chat and markdown
+		markdown = response
+	}
+	
+	return
 }
 
 func callAnthropic(apiKey string, messages []ChatMessage) (string, error) {
@@ -2989,191 +3098,178 @@ const indexHTML = `<!DOCTYPE html>
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>BoundedLISP Requirements</title>
+    <title>BoundedLISP</title>
     <script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; }
         body { 
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            background: #1a1a2e; color: #eee; 
+            background: #0d1117; color: #c9d1d9; 
             display: flex; height: 100vh;
         }
-        .sidebar {
-            width: 220px; background: #16213e; padding: 1rem;
-            border-right: 1px solid #0f3460; overflow-y: auto;
-            display: flex; flex-direction: column;
-        }
-        .sidebar h2 { font-size: 0.9rem; margin-bottom: 0.75rem; color: #e94560; text-transform: uppercase; letter-spacing: 1px; }
-        .version-list { flex: 1; overflow-y: auto; }
-        .version-item {
-            padding: 0.5rem 0.75rem; margin: 0.25rem 0; background: #0f3460;
-            border-radius: 4px; cursor: pointer; font-size: 0.8rem;
-        }
-        .version-item:hover { background: #1a4a7a; }
-        .version-item.active { border-left: 3px solid #e94560; background: #1a4a7a; }
-        .version-item small { color: #888; }
-        .main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
-        .header {
-            padding: 0.75rem 1rem; background: #16213e; border-bottom: 1px solid #0f3460;
-            display: flex; gap: 1rem; align-items: center;
-        }
-        .header select {
-            padding: 0.5rem; border: 1px solid #0f3460; border-radius: 4px;
-            background: #1a1a2e; color: #eee;
-        }
-        .header .title { font-weight: bold; color: #e94560; }
-        .header .spacer { flex: 1; }
-        .btn {
-            padding: 0.5rem 1rem; background: #0f3460; border: none;
-            border-radius: 4px; color: #eee; cursor: pointer; font-size: 0.85rem;
-        }
-        .btn:hover { background: #1a4a7a; }
-        .btn.primary { background: #e94560; }
-        .btn.primary:hover { background: #ff6b6b; }
-        .content { flex: 1; display: flex; overflow: hidden; }
         
-        /* Chat Panel */
+        /* Chat Panel - Left */
         .chat-panel { 
-            width: 45%; min-width: 350px; display: flex; flex-direction: column; 
-            border-right: 1px solid #0f3460; 
+            width: 40%; min-width: 320px; display: flex; flex-direction: column; 
+            border-right: 1px solid #30363d; background: #0d1117;
+        }
+        .chat-header {
+            padding: 0.75rem 1rem; background: #161b22; border-bottom: 1px solid #30363d;
+            display: flex; align-items: center; gap: 0.75rem;
+        }
+        .chat-header .title { font-weight: 600; color: #58a6ff; }
+        .chat-header .spacer { flex: 1; }
+        .chat-header select {
+            padding: 0.4rem 0.6rem; border: 1px solid #30363d; border-radius: 6px;
+            background: #21262d; color: #c9d1d9; font-size: 0.85rem;
         }
         .messages { flex: 1; overflow-y: auto; padding: 1rem; }
-        .message { margin: 0.75rem 0; padding: 0.75rem 1rem; border-radius: 8px; }
-        .message.user { background: #0f3460; margin-left: 15%; }
-        .message.assistant { background: #1e1e3a; margin-right: 5%; border-left: 3px solid #e94560; }
-        .message p { margin: 0.5rem 0; line-height: 1.5; }
-        .message pre { background: #0a0a15; padding: 0.75rem; border-radius: 4px; overflow-x: auto; margin: 0.75rem 0; }
+        .message { margin: 0.75rem 0; padding: 0.75rem 1rem; border-radius: 8px; line-height: 1.6; }
+        .message.user { background: #1f6feb33; margin-left: 10%; border: 1px solid #1f6feb55; }
+        .message.assistant { background: #21262d; margin-right: 5%; }
+        .message p { margin: 0.5rem 0; }
+        .message pre { background: #161b22; padding: 0.75rem; border-radius: 6px; overflow-x: auto; margin: 0.75rem 0; }
         .message code { font-family: 'Fira Code', 'Consolas', monospace; font-size: 0.85rem; }
         .message ul, .message ol { margin: 0.5rem 0 0.5rem 1.5rem; }
-        .message h1, .message h2, .message h3 { color: #e94560; margin: 1rem 0 0.5rem; }
-        .input-area { padding: 1rem; background: #16213e; display: flex; gap: 0.5rem; }
+        .input-area { padding: 1rem; background: #161b22; border-top: 1px solid #30363d; display: flex; gap: 0.5rem; }
         .input-area textarea { 
-            flex: 1; padding: 0.75rem; border: 1px solid #0f3460; border-radius: 4px;
-            background: #1a1a2e; color: #eee; resize: none; font-family: inherit;
+            flex: 1; padding: 0.75rem; border: 1px solid #30363d; border-radius: 6px;
+            background: #0d1117; color: #c9d1d9; resize: none; font-family: inherit;
             font-size: 0.95rem; line-height: 1.4;
         }
-        .input-area textarea:focus { outline: none; border-color: #e94560; }
+        .input-area textarea:focus { outline: none; border-color: #58a6ff; }
+        .btn {
+            padding: 0.5rem 1rem; background: #21262d; border: 1px solid #30363d;
+            border-radius: 6px; color: #c9d1d9; cursor: pointer; font-size: 0.85rem;
+        }
+        .btn:hover { background: #30363d; }
+        .btn.primary { background: #238636; border-color: #238636; color: #fff; }
+        .btn.primary:hover { background: #2ea043; }
         
-        /* Document Panel */
+        /* Document Panel - Right */
         .doc-panel { 
             flex: 1; display: flex; flex-direction: column; 
-            background: #0d0d1a; min-width: 0;
+            background: #0d1117; min-width: 0;
         }
         .doc-tabs { 
-            display: flex; gap: 0; background: #16213e; 
-            border-bottom: 1px solid #0f3460;
+            display: flex; background: #161b22; border-bottom: 1px solid #30363d;
         }
         .doc-tab { 
-            padding: 0.75rem 1.25rem; cursor: pointer; 
+            padding: 0.75rem 1.5rem; cursor: pointer; 
             border-bottom: 2px solid transparent;
-            font-size: 0.85rem; color: #aaa;
+            font-size: 0.9rem; color: #8b949e;
         }
-        .doc-tab:hover { color: #eee; }
-        .doc-tab.active { color: #e94560; border-bottom-color: #e94560; }
-        .doc-frame { 
-            flex: 1; overflow: hidden; background: #fff;
-        }
-        .doc-frame iframe {
-            width: 100%; height: 100%; border: none;
-        }
+        .doc-tab:hover { color: #c9d1d9; }
+        .doc-tab.active { color: #58a6ff; border-bottom-color: #58a6ff; }
+        
         .doc-content {
             flex: 1; overflow-y: auto; padding: 1.5rem;
-            background: #0d0d1a;
-        }
-        .doc-content.markdown-body {
-            background: #fff; color: #24292e;
-        }
-        .doc-content.markdown-body h1 { border-bottom: 1px solid #eee; padding-bottom: 0.3em; }
-        .doc-content.markdown-body h2 { border-bottom: 1px solid #eee; padding-bottom: 0.3em; }
-        .doc-content.markdown-body pre { background: #f6f8fa; padding: 1rem; border-radius: 6px; }
-        .doc-content.markdown-body code { font-family: 'Fira Code', monospace; }
-        .doc-content.markdown-body .mermaid { margin: 1rem 0; }
-        .doc-content.code-view pre { 
-            background: #1a1a2e; color: #eee; padding: 1rem; 
-            border-radius: 4px; margin: 0; font-size: 0.9rem;
-            white-space: pre-wrap; word-wrap: break-word;
         }
         
-        /* Empty state */
+        /* Dark mode markdown */
+        .doc-content.markdown {
+            color: #c9d1d9; line-height: 1.7;
+        }
+        .doc-content.markdown h1 { color: #58a6ff; font-size: 1.8rem; margin: 1.5rem 0 1rem; padding-bottom: 0.3em; border-bottom: 1px solid #30363d; }
+        .doc-content.markdown h2 { color: #58a6ff; font-size: 1.4rem; margin: 1.5rem 0 0.75rem; padding-bottom: 0.3em; border-bottom: 1px solid #30363d; }
+        .doc-content.markdown h3 { color: #8b949e; font-size: 1.15rem; margin: 1.25rem 0 0.5rem; }
+        .doc-content.markdown p { margin: 0.75rem 0; }
+        .doc-content.markdown pre { background: #161b22; padding: 1rem; border-radius: 6px; overflow-x: auto; margin: 1rem 0; border: 1px solid #30363d; }
+        .doc-content.markdown code { font-family: 'Fira Code', 'Consolas', monospace; font-size: 0.9rem; color: #79c0ff; }
+        .doc-content.markdown pre code { color: #c9d1d9; }
+        .doc-content.markdown ul, .doc-content.markdown ol { margin: 0.75rem 0 0.75rem 1.5rem; }
+        .doc-content.markdown li { margin: 0.35rem 0; }
+        .doc-content.markdown strong { color: #f0f6fc; }
+        .doc-content.markdown em { color: #8b949e; }
+        .doc-content.markdown blockquote { border-left: 3px solid #30363d; padding-left: 1rem; color: #8b949e; margin: 1rem 0; }
+        .doc-content.markdown table { border-collapse: collapse; width: 100%; margin: 1rem 0; }
+        .doc-content.markdown th, .doc-content.markdown td { border: 1px solid #30363d; padding: 0.5rem 0.75rem; text-align: left; }
+        .doc-content.markdown th { background: #161b22; color: #58a6ff; }
+        .doc-content.markdown .mermaid { background: #161b22; padding: 1rem; border-radius: 6px; margin: 1rem 0; }
+        
+        /* Property status */
+        .doc-content.markdown .prop-pass { color: #3fb950; }
+        .doc-content.markdown .prop-fail { color: #f85149; }
+        .doc-content.markdown .prop-check { display: inline-block; margin-right: 0.5rem; }
+        
+        /* Code view */
+        .doc-content.code pre { 
+            background: #161b22; color: #c9d1d9; padding: 1rem; 
+            border-radius: 6px; margin: 0; font-size: 0.9rem;
+            white-space: pre-wrap; word-wrap: break-word;
+            border: 1px solid #30363d;
+        }
+        
         .empty-state {
             display: flex; align-items: center; justify-content: center;
-            height: 100%; color: #666; font-style: italic;
+            height: 100%; color: #8b949e; font-style: italic;
         }
+        
+        .loading { color: #8b949e; }
     </style>
 </head>
 <body>
-    <div class="sidebar">
-        <h2>📋 Versions</h2>
-        <div class="version-list" id="versions">
-            <div class="empty-state" style="font-size: 0.8rem;">No versions yet</div>
-        </div>
-        <button class="btn" onclick="newSession()" style="margin-top: 1rem; width: 100%;">+ New Session</button>
-    </div>
-    <div class="main">
-        <div class="header">
-            <span class="title">🔷 BoundedLISP Requirements</span>
+    <div class="chat-panel">
+        <div class="chat-header">
+            <span class="title">🔷 BoundedLISP</span>
             <span class="spacer"></span>
             <select id="provider">
-                <option value="anthropic">Claude (Anthropic)</option>
-                <option value="openai">GPT-4 (OpenAI)</option>
+                <option value="anthropic">Claude</option>
+                <option value="openai">GPT-4</option>
             </select>
-            <button class="btn" onclick="exportSpec()">📄 Export</button>
         </div>
-        <div class="content">
-            <div class="chat-panel">
-                <div class="messages" id="messages">
-                    <div class="message assistant">
-                        <p>👋 Hi! I'm here to help you specify a multi-party protocol or distributed system.</p>
-                        <p>Describe what you're trying to build, and I'll help you refine the requirements into a formal specification with state diagrams.</p>
-                        <p><strong>Examples:</strong></p>
-                        <ul>
-                            <li>"I need a payment protocol between buyer, seller, and escrow"</li>
-                            <li>"Design a document approval workflow"</li>
-                            <li>"Create a simple request-response API"</li>
-                        </ul>
-                    </div>
-                </div>
-                <div class="input-area">
-                    <textarea id="input" rows="3" placeholder="Describe your system or ask a question..."></textarea>
-                    <button class="btn primary" onclick="sendMessage()">Send</button>
-                </div>
+        <div class="messages" id="messages">
+            <div class="message assistant">
+                <p>Describe your multi-party protocol or distributed system. I'll help you specify it formally.</p>
+                <p>After each message, I'll generate a complete specification document with:</p>
+                <ul>
+                    <li>Actor state machines (EFSMs)</li>
+                    <li>Interaction/sequence diagrams</li>
+                    <li>Verified properties with ✓/✗ status</li>
+                    <li>Executable LISP code</li>
+                </ul>
             </div>
-            <div class="doc-panel">
-                <div class="doc-tabs">
-                    <div class="doc-tab active" onclick="showTab('rendered')">📖 Document</div>
-                    <div class="doc-tab" onclick="showTab('code')">💻 LISP Code</div>
-                    <div class="doc-tab" onclick="showTab('diagram')">📊 Diagram</div>
-                </div>
-                <div class="doc-content" id="docContent">
-                    <div class="empty-state">Specification will appear here as we develop it...</div>
-                </div>
-            </div>
+        </div>
+        <div class="input-area">
+            <textarea id="input" rows="3" placeholder="Describe your system..."></textarea>
+            <button class="btn primary" onclick="sendMessage()">Send</button>
+        </div>
+    </div>
+    <div class="doc-panel">
+        <div class="doc-tabs">
+            <div class="doc-tab active" onclick="showTab('markdown')">📖 Specification</div>
+            <div class="doc-tab" onclick="showTab('code')">💻 LISP</div>
+        </div>
+        <div class="doc-content markdown" id="docContent">
+            <div class="empty-state">Specification document will appear here...</div>
         </div>
     </div>
     <script>
-        mermaid.initialize({ startOnLoad: false, theme: 'default' });
+        mermaid.initialize({ 
+            startOnLoad: false, 
+            theme: 'dark',
+            themeVariables: {
+                primaryColor: '#1f6feb',
+                primaryTextColor: '#c9d1d9',
+                primaryBorderColor: '#30363d',
+                lineColor: '#8b949e',
+                secondaryColor: '#21262d',
+                tertiaryColor: '#161b22',
+                background: '#0d1117',
+                mainBkg: '#161b22',
+                nodeBorder: '#30363d',
+                clusterBkg: '#21262d',
+                titleColor: '#58a6ff',
+                edgeLabelBackground: '#21262d'
+            }
+        });
         marked.setOptions({ gfm: true, breaks: true });
         
         let sessionId = 'session-' + Date.now();
-        let currentTab = 'rendered';
-        let currentDoc = '';
-        let fullResponse = '';
-        
-        function newSession() {
-            if (currentDoc && !confirm('Start a new session? Current work will be cleared.')) return;
-            sessionId = 'session-' + Date.now();
-            document.getElementById('messages').innerHTML = ` + "`" + `
-                <div class="message assistant">
-                    <p>👋 Hi! I'm here to help you specify a multi-party protocol or distributed system.</p>
-                    <p>Describe what you're trying to build, and I'll help you refine the requirements into a formal specification.</p>
-                </div>
-            ` + "`" + `;
-            document.getElementById('versions').innerHTML = '<div class="empty-state" style="font-size: 0.8rem;">No versions yet</div>';
-            document.getElementById('docContent').innerHTML = '<div class="empty-state">Specification will appear here...</div>';
-            currentDoc = '';
-            fullResponse = '';
-        }
+        let currentTab = 'markdown';
+        let currentDoc = '';      // LISP code
+        let currentMarkdown = ''; // Full specification markdown
         
         async function sendMessage() {
             const input = document.getElementById('input');
@@ -3185,10 +3281,9 @@ const indexHTML = `<!DOCTYPE html>
             addMessage('user', message);
             input.value = '';
             
-            // Show loading
             const loadingDiv = document.createElement('div');
-            loadingDiv.className = 'message assistant';
-            loadingDiv.innerHTML = '<p><em>Thinking...</em></p>';
+            loadingDiv.className = 'message assistant loading';
+            loadingDiv.innerHTML = '<p><em>Generating specification...</em></p>';
             loadingDiv.id = 'loading';
             document.getElementById('messages').appendChild(loadingDiv);
             loadingDiv.scrollIntoView({ behavior: 'smooth' });
@@ -3206,20 +3301,21 @@ const indexHTML = `<!DOCTYPE html>
                 
                 document.getElementById('loading')?.remove();
                 
-                if (!resp.ok) {
-                    const err = await resp.text();
-                    throw new Error(err);
-                }
+                if (!resp.ok) throw new Error(await resp.text());
                 
                 const data = await resp.json();
                 
-                addMessage('assistant', data.response);
-                fullResponse = data.response;
+                // Short acknowledgment in chat
+                addMessage('assistant', data.chat_response || 'Updated specification.');
                 
+                // Full markdown document in panel
+                if (data.markdown) {
+                    currentMarkdown = data.markdown;
+                    updateDocPanel();
+                }
                 if (data.current_doc) {
                     currentDoc = data.current_doc;
-                    updateDocPanel();
-                    loadVersions();
+                    if (currentTab === 'code') updateDocPanel();
                 }
             } catch (err) {
                 document.getElementById('loading')?.remove();
@@ -3233,120 +3329,39 @@ const indexHTML = `<!DOCTYPE html>
             div.innerHTML = marked.parse(content);
             document.getElementById('messages').appendChild(div);
             div.scrollIntoView({ behavior: 'smooth' });
-            
-            // Render mermaid in chat
-            setTimeout(() => {
-                div.querySelectorAll('pre code.language-mermaid').forEach((el, i) => {
-                    const container = document.createElement('div');
-                    container.className = 'mermaid';
-                    container.id = 'mermaid-chat-' + Date.now() + '-' + i;
-                    container.textContent = el.textContent;
-                    el.parentElement.replaceWith(container);
-                });
-                mermaid.run();
-            }, 100);
-        }
-        
-        async function loadVersions() {
-            const resp = await fetch('/versions?session_id=' + sessionId);
-            const versions = await resp.json();
-            
-            const container = document.getElementById('versions');
-            if (!versions || versions.length === 0) {
-                container.innerHTML = '<div class="empty-state" style="font-size: 0.8rem;">No versions yet</div>';
-                return;
-            }
-            
-            container.innerHTML = versions.map((v, i) => 
-                ` + "`" + `<div class="version-item ${i === versions.length - 1 ? 'active' : ''}" onclick="loadVersion(${v.version})">
-                    <strong>v${v.version}</strong> - ${v.summary || 'Draft'}
-                    <br><small>${new Date(v.timestamp).toLocaleTimeString()}</small>
-                </div>` + "`" + `
-            ).join('');
-        }
-        
-        async function loadVersion(num) {
-            const resp = await fetch('/version/' + num + '?session_id=' + sessionId);
-            const version = await resp.json();
-            currentDoc = version.content;
-            updateDocPanel();
-            
-            // Update active state
-            document.querySelectorAll('.version-item').forEach(el => el.classList.remove('active'));
-            event.target.closest('.version-item').classList.add('active');
         }
         
         function updateDocPanel() {
             const container = document.getElementById('docContent');
             
-            if (!currentDoc && !fullResponse) {
-                container.innerHTML = '<div class="empty-state">Specification will appear here...</div>';
-                container.className = 'doc-content';
-                return;
-            }
-            
-            if (currentTab === 'rendered') {
-                // Render the full response as markdown
-                container.className = 'doc-content markdown-body';
-                container.innerHTML = marked.parse(fullResponse || '# Specification\n\n` + "```" + `lisp\n' + currentDoc + '\n` + "```" + `');
+            if (currentTab === 'markdown') {
+                container.className = 'doc-content markdown';
+                if (!currentMarkdown) {
+                    container.innerHTML = '<div class="empty-state">Specification document will appear here...</div>';
+                    return;
+                }
+                container.innerHTML = marked.parse(currentMarkdown);
                 
                 // Render mermaid diagrams
                 setTimeout(() => {
                     container.querySelectorAll('pre code.language-mermaid').forEach((el, i) => {
                         const wrapper = document.createElement('div');
                         wrapper.className = 'mermaid';
-                        wrapper.id = 'mermaid-doc-' + Date.now() + '-' + i;
+                        wrapper.id = 'mermaid-' + Date.now() + '-' + i;
                         wrapper.textContent = el.textContent;
                         el.parentElement.replaceWith(wrapper);
                     });
                     mermaid.run();
-                }, 100);
+                }, 50);
                 
             } else if (currentTab === 'code') {
-                container.className = 'doc-content code-view';
+                container.className = 'doc-content code';
+                if (!currentDoc) {
+                    container.innerHTML = '<div class="empty-state">LISP code will appear here...</div>';
+                    return;
+                }
                 container.innerHTML = '<pre><code>' + escapeHtml(currentDoc) + '</code></pre>';
-                
-            } else if (currentTab === 'diagram') {
-                container.className = 'doc-content markdown-body';
-                const diagram = generateStateDiagram(currentDoc);
-                container.innerHTML = '<div class="mermaid" id="main-diagram">' + diagram + '</div>';
-                setTimeout(() => mermaid.run(), 100);
             }
-        }
-        
-        function generateStateDiagram(code) {
-            const lines = ['stateDiagram-v2'];
-            const transitions = [];
-            const terminals = new Set();
-            
-            // Find transitions: (StateName (A -> B : msg) -> NextState)
-            const transRe = /\((\w+)\s+\((\w+)\s*->\s*(\w+)\s*:\s*(\w+)\)\s*->\s*(\w+)\)/g;
-            let match;
-            while ((match = transRe.exec(code)) !== null) {
-                transitions.push({ from: match[1], to: match[5], msg: match[4] });
-            }
-            
-            // Find terminal states: '(StateName))
-            const termRe = /'\((\w+)\)\)/g;
-            while ((match = termRe.exec(code)) !== null) {
-                terminals.add(match[1]);
-            }
-            
-            if (transitions.length === 0) {
-                return 'stateDiagram-v2\n    note "No grammar defined yet"';
-            }
-            
-            lines.push('    [*] --> ' + transitions[0].from);
-            
-            for (const t of transitions) {
-                lines.push('    ' + t.from + ' --> ' + t.to + ' : ' + t.msg);
-            }
-            
-            for (const t of terminals) {
-                lines.push('    ' + t + ' --> [*]');
-            }
-            
-            return lines.join('\n');
         }
         
         function showTab(tab) {
@@ -3356,25 +3371,10 @@ const indexHTML = `<!DOCTYPE html>
             updateDocPanel();
         }
         
-        function exportSpec() {
-            if (!currentDoc) {
-                alert('No specification to export yet');
-                return;
-            }
-            const blob = new Blob([currentDoc], { type: 'text/plain' });
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = 'specification.lisp';
-            a.click();
-            URL.revokeObjectURL(url);
-        }
-        
         function escapeHtml(text) {
             return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
         }
         
-        // Handle enter key
         document.getElementById('input').addEventListener('keydown', e => {
             if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault();

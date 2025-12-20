@@ -568,7 +568,7 @@
   *tick*)
 
 ; ============================================================================
-(println "BoundedLISP Actor Prologue loaded.")
+(println "BoundedLISP Prologue loaded.")
 ; ============================================================================
 ; Probability Distribution Transformations
 ; Transform uniform [0,1] pre-rolls into various distributions
@@ -726,6 +726,3 @@
 ; Check if pool has dice remaining
 (define (dice-remaining? pool)
   (not (queue-empty? pool)))
-
-; ----------------------------------------------------------------------------
-(println "Distributions module loaded.")
