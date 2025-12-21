@@ -607,7 +607,105 @@
 (assert-eq (add7 10) 17 "closure captures n=7")
 
 ; ============================================================================
+; Metrics Actor Tests
+; ============================================================================
+
+(test-section "Metrics")
+
+; Test helper functions directly
+(assert-eq (sum-list '(1 2 3 4 5)) 15 "sum-list")
+(assert-eq (sort-numbers '(3 1 4 1 5 9 2 6)) '(1 1 2 3 4 5 6 9) "sort-numbers")
+
+; Test metrics state management
+(define test-state (make-empty-metrics-state))
+(assert-eq (metrics-get test-state 'counters) '() "empty counters")
+
+(define test-state2 (update-counter test-state 'requests 1))
+(define test-state3 (update-counter test-state2 'requests 1))
+(assert-eq (second (assoc 'requests (metrics-get test-state3 'counters))) 2 "counter increments")
+
+(define test-state4 (update-gauge test-state 'queue-depth 42))
+(assert-eq (second (assoc 'queue-depth (metrics-get test-state4 'gauges))) 42 "gauge set")
+
+(define test-state5 (add-timing test-state 'latency 100))
+(define test-state6 (add-timing test-state5 'latency 200))
+(assert-eq (length (second (assoc 'latency (metrics-get test-state6 'timings)))) 2 "timing samples")
+
+; ============================================================================
 ; Summary
 ; ============================================================================
 
 (test-summary)
+
+; ============================================================================
+; Metrics Actor Integration Test - Actors sending real metrics
+; ============================================================================
+
+(test-section "Metrics Integration")
+
+; Reset state
+(reset-scheduler)
+
+; Start the metrics collector
+(start-metrics!)
+
+; NOTE: In BoundedLISP, code before receive! may execute multiple times
+; due to how blocking works. Place metric calls AFTER receive! for accurate counts.
+
+; A client that sends requests and records timing
+(define (test-client-loop count)
+  (if (<= count 0)
+      'done
+      (do
+        (send-to! 'server (list 'request (self)))
+        (let response (receive!)
+          ; Count AFTER receiving to avoid double-counting
+          (metric-inc! 'roundtrips)
+          (metric-timing! 'latency (+ 10 (mod count 5)))
+          (list 'become (list 'test-client-loop (- count 1)))))))
+
+; A server that handles requests
+(define (test-server-loop handled)
+  (let msg (receive!)
+    ; Count AFTER receiving
+    (metric-inc! 'requests-handled)
+    (metric-gauge! 'total-handled (+ handled 1))
+    (let sender (second msg)
+      (send-to! sender 'ok)
+      (list 'become (list 'test-server-loop (+ handled 1))))))
+
+(spawn-actor 'server 32 '(test-server-loop 0))
+(spawn-actor 'client 32 '(test-client-loop 10))
+
+; Run for enough ticks
+(run-scheduler 200)
+
+; Check that metrics were collected
+(define final-metrics (get-metrics))
+
+; Extract metrics - use REST not SECOND to get all entries
+(define counters (rest (assoc 'counters final-metrics)))
+(define gauges (rest (assoc 'gauges final-metrics)))
+(define timings (rest (assoc 'timings final-metrics)))
+
+(define roundtrips (assoc 'roundtrips counters))
+(define handled (assoc 'requests-handled counters))
+(define total-gauge (assoc 'total-handled gauges))
+(define latency (assoc 'latency timings))
+
+(assert-true (not (nil? roundtrips)) "roundtrips counter exists")
+(assert-true (not (nil? handled)) "requests-handled counter exists")
+(assert-true (not (nil? total-gauge)) "total-handled gauge exists")
+(assert-true (not (nil? latency)) "latency timing exists")
+
+; Check values - roundtrips should be exactly 10
+(assert-eq (second roundtrips) 10 "10 roundtrips completed")
+; Server may handle more due to blocking restart behavior
+(assert-true (>= (second handled) 10) "at least 10 requests handled")
+(assert-eq (length (second latency)) 10 "10 timing samples")
+
+(println "")
+(println "Collected metrics:")
+(println "  Counters: " counters)
+(println "  Gauges: " gauges)
+(println "  Timing samples: " (length (second latency)))

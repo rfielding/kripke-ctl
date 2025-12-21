@@ -305,6 +305,51 @@ Return values:
 - Complex numbers
 - Rational numbers
 
+## Metrics Actor
+
+BoundedLISP includes a built-in metrics collection actor for monitoring simulations.
+
+### Starting Metrics Collection
+```lisp
+(start-metrics!)  ; spawns the 'metrics actor
+```
+
+### Sending Metrics
+```lisp
+(metric-inc! 'requests)           ; increment counter by 1
+(metric-counter! 'bytes 1024)     ; increment counter by value
+(metric-gauge! 'queue-depth 42)   ; set gauge to value
+(metric-timing! 'latency 150)     ; record timing sample
+(metric-event! 'error)            ; same as (metric-inc! 'error)
+```
+
+### Reading Metrics
+```lisp
+(get-metrics)  ; returns current metrics state
+; => ((counters (requests 100) (bytes 10240)) 
+;     (gauges (queue-depth 42)) 
+;     (timings (latency (150 120 180))) 
+;     (events))
+```
+
+### Important: Placement Matters
+
+Due to how actors block on `receive!`, code BEFORE receive may execute multiple times. Place metric calls AFTER receive for accurate counts:
+
+```lisp
+; WRONG - may double-count
+(define (my-actor)
+  (metric-inc! 'iterations)  ; runs each time actor wakes!
+  (let msg (receive!)
+    ...))
+
+; CORRECT - counts once per message
+(define (my-actor)
+  (let msg (receive!)
+    (metric-inc! 'processed)  ; runs once per received message
+    ...))
+```
+
 ## Summary: Key Differences from Standard Lisps
 
 | Feature | Scheme | Common Lisp | BoundedLISP |

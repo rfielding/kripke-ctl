@@ -568,6 +568,167 @@
   *tick*)
 
 ; ============================================================================
+; PART 11: Metrics Actor
+; ============================================================================
+
+; Global metrics storage (for queries outside actor system)
+(define *metrics* '())
+
+; Metrics actor loop - receives metric events, accumulates statistics
+; Messages:
+;   (counter name delta)      - increment counter by delta
+;   (gauge name value)        - set gauge to value  
+;   (timing name duration)    - record a timing
+;   (event name)              - increment event count
+;   (query sender)            - send current metrics to sender
+;   (reset)                   - clear all metrics
+;
+; State: ((counters . alist) (gauges . alist) (timings . alist) (events . alist))
+
+(define (metrics-loop state)
+  (let msg (receive!)
+    (let cmd (first msg)
+      (let new-state
+        (cond
+          ((= cmd 'counter)
+           (let name (second msg)
+             (let delta (third msg)
+               (update-counter state name delta))))
+          
+          ((= cmd 'gauge)
+           (let name (second msg)
+             (let value (third msg)
+               (update-gauge state name value))))
+          
+          ((= cmd 'timing)
+           (let name (second msg)
+             (let duration (third msg)
+               (add-timing state name duration))))
+          
+          ((= cmd 'event)
+           (let name (second msg)
+             (update-counter state name 1)))
+          
+          ((= cmd 'query)
+           (let sender (second msg)
+             (do
+               (send-to! sender (list 'metrics (compute-stats state)))
+               state)))
+          
+          ((= cmd 'reset)
+           (make-empty-metrics-state))
+          
+          (true state))
+        (do
+          (set! *metrics* new-state)
+          (list 'become (list 'metrics-loop (list 'quote new-state))))))))
+
+(define (make-empty-metrics-state)
+  (list (list 'counters) (list 'gauges) (list 'timings) (list 'events)))
+
+(define (metrics-get state key)
+  (let entry (assoc key state)
+    (if (nil? entry)
+        '()
+        (rest entry))))
+
+(define (metrics-set state key value)
+  (let without (filter (lambda (e) (not (= (first e) key))) state)
+    (cons (cons key value) without)))
+
+(define (update-counter state name delta)
+  (let counters (metrics-get state 'counters)
+    (let current (assoc name counters)
+      (let new-val (+ (if (nil? current) 0 (second current)) delta)
+        (let new-counters (cons (list name new-val) 
+                                (filter (lambda (e) (not (= (first e) name))) counters))
+          (metrics-set state 'counters new-counters))))))
+
+(define (update-gauge state name value)
+  (let gauges (metrics-get state 'gauges)
+    (let new-gauges (cons (list name value)
+                          (filter (lambda (e) (not (= (first e) name))) gauges))
+      (metrics-set state 'gauges new-gauges))))
+
+(define (add-timing state name duration)
+  (let timings (metrics-get state 'timings)
+    (let current (assoc name timings)
+      (let samples (if (nil? current) '() (second current))
+        (let new-samples (cons duration samples)
+          (let new-timings (cons (list name new-samples)
+                                 (filter (lambda (e) (not (= (first e) name))) timings))
+            (metrics-set state 'timings new-timings)))))))
+
+(define (compute-stats state)
+  (list
+    (list 'counters (metrics-get state 'counters))
+    (list 'gauges (metrics-get state 'gauges))
+    (list 'timings (map (lambda (t)
+                          (list (first t) (timing-stats (second t))))
+                        (metrics-get state 'timings)))))
+
+(define (timing-stats samples)
+  (if (empty? samples)
+      '()
+      (let n (length samples)
+        (let total (sum-list samples)
+          (let mean (/ total n)
+            (let sorted (sort-numbers samples)
+              (list (list 'count n)
+                    (list 'mean mean)
+                    (list 'min (first sorted))
+                    (list 'max (first (reverse sorted)))
+                    (list 'p50 (percentile sorted 50))
+                    (list 'p99 (percentile sorted 99)))))))))
+
+(define (sum-list lst)
+  (if (empty? lst)
+      0
+      (+ (first lst) (sum-list (rest lst)))))
+
+(define (sort-numbers lst)
+  (if (empty? lst)
+      '()
+      (let pivot (first lst)
+        (let rest-lst (rest lst)
+          (let smaller (filter (lambda (x) (< x pivot)) rest-lst)
+            (let larger (filter (lambda (x) (>= x pivot)) rest-lst)
+              (append (sort-numbers smaller) 
+                      (cons pivot (sort-numbers larger)))))))))
+
+(define (percentile sorted p)
+  (if (empty? sorted)
+      0
+      (let n (length sorted)
+        (let idx (floor (* (/ p 100) n))
+          (let safe-idx (if (>= idx n) (- n 1) idx)
+            (nth sorted safe-idx))))))
+
+; Convenience functions for sending metrics
+(define (metric-counter! name delta)
+  (send-to! 'metrics (list 'counter name delta)))
+
+(define (metric-inc! name)
+  (send-to! 'metrics (list 'counter name 1)))
+
+(define (metric-gauge! name value)
+  (send-to! 'metrics (list 'gauge name value)))
+
+(define (metric-timing! name duration)
+  (send-to! 'metrics (list 'timing name duration)))
+
+(define (metric-event! name)
+  (send-to! 'metrics (list 'event name)))
+
+; Spawn the metrics actor
+(define (start-metrics!)
+  (spawn-actor 'metrics 256 (list 'metrics-loop (list 'quote (make-empty-metrics-state)))))
+
+; Get current metrics (from global, not via message)
+(define (get-metrics)
+  *metrics*)
+
+; ============================================================================
 (println "BoundedLISP Prologue loaded.")
 ; ============================================================================
 ; Probability Distribution Transformations
