@@ -2584,9 +2584,9 @@ func runServer(ev *Evaluator, port string) {
 	hasOpenAI := os.Getenv("OPENAI_API_KEY") != ""
 	
 	fmt.Println("╔════════════════════════════════════════════════════════════╗")
-	fmt.Println("║          BoundedLISP Requirements Server                   ║")
+	fmt.Println("║              BoundedLISP Protocol Designer                 ║")
 	fmt.Println("╠════════════════════════════════════════════════════════════╣")
-	fmt.Printf("║  Server: http://localhost:%-33s║\n", port)
+	fmt.Printf("║  Web UI: http://localhost:%-33s║\n", port)
 	fmt.Println("╠════════════════════════════════════════════════════════════╣")
 	if hasAnthropic {
 		fmt.Println("║  ✓ ANTHROPIC_API_KEY set                                   ║")
@@ -2598,15 +2598,86 @@ func runServer(ev *Evaluator, port string) {
 	} else {
 		fmt.Println("║  ✗ OPENAI_API_KEY not set                                  ║")
 	}
-	if !hasAnthropic && !hasOpenAI {
-		fmt.Println("╠════════════════════════════════════════════════════════════╣")
-		fmt.Println("║  ⚠ Set at least one API key to enable chat                 ║")
-	}
+	fmt.Println("╠════════════════════════════════════════════════════════════╣")
+	fmt.Println("║  Type here for quick queries, or use the web UI            ║")
 	fmt.Println("╚════════════════════════════════════════════════════════════╝")
+	fmt.Println()
 	
-	if err := http.ListenAndServe(":"+port, nil); err != nil {
-		fmt.Fprintf(os.Stderr, "Server error: %v\n", err)
-		os.Exit(1)
+	// Start HTTP server in background
+	go func() {
+		if err := http.ListenAndServe(":"+port, nil); err != nil {
+			fmt.Fprintf(os.Stderr, "Server error: %v\n", err)
+			os.Exit(1)
+		}
+	}()
+	
+	// Console input loop
+	runConsoleChat(hasAnthropic, hasOpenAI)
+}
+
+// Console chat - type queries while server is running
+func runConsoleChat(hasAnthropic, hasOpenAI bool) {
+	if !hasAnthropic && !hasOpenAI {
+		// No API keys, just block forever
+		select {}
+	}
+	
+	reader := bufio.NewReader(os.Stdin)
+	sess := getOrCreateSession("console")
+	
+	provider := "anthropic"
+	if !hasAnthropic && hasOpenAI {
+		provider = "openai"
+	}
+	
+	for {
+		fmt.Print("\n> ")
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			break
+		}
+		
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		
+		if line == "exit" || line == "quit" {
+			fmt.Println("Goodbye!")
+			os.Exit(0)
+		}
+		
+		// Get API key
+		var apiKey string
+		if provider == "openai" {
+			apiKey = os.Getenv("OPENAI_API_KEY")
+		} else {
+			apiKey = os.Getenv("ANTHROPIC_API_KEY")
+		}
+		
+		sess.mu.Lock()
+		sess.Messages = append(sess.Messages, ChatMessage{Role: "user", Content: line})
+		
+		var response string
+		if provider == "openai" {
+			response, err = callOpenAI(apiKey, sess.Messages)
+		} else {
+			response, err = callAnthropic(apiKey, sess.Messages)
+		}
+		
+		if err != nil {
+			fmt.Printf("Error: %v\n", err)
+			sess.mu.Unlock()
+			continue
+		}
+		
+		sess.Messages = append(sess.Messages, ChatMessage{Role: "assistant", Content: response})
+		sess.mu.Unlock()
+		
+		// Parse and display
+		chat, _, _ := parseStructuredResponse(response)
+		fmt.Println()
+		fmt.Println(chat)
 	}
 }
 
@@ -3101,6 +3172,8 @@ const indexHTML = `<!DOCTYPE html>
     <title>BoundedLISP</title>
     <script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; }
         body { 
@@ -3109,110 +3182,112 @@ const indexHTML = `<!DOCTYPE html>
             display: flex; height: 100vh;
         }
         
-        /* Chat Panel - Left */
-        .chat-panel { 
-            width: 40%; min-width: 320px; display: flex; flex-direction: column; 
-            border-right: 1px solid #30363d; background: #0d1117;
+        /* Three-panel layout */
+        .panel {
+            display: flex; flex-direction: column;
+            border-right: 1px solid #30363d;
         }
-        .chat-header {
-            padding: 0.75rem 1rem; background: #161b22; border-bottom: 1px solid #30363d;
+        .panel:last-child { border-right: none; }
+        .panel-header {
+            padding: 0.6rem 1rem; background: #161b22; border-bottom: 1px solid #30363d;
             display: flex; align-items: center; gap: 0.75rem;
+            font-weight: 600; font-size: 0.9rem;
         }
-        .chat-header .title { font-weight: 600; color: #58a6ff; }
-        .chat-header .spacer { flex: 1; }
-        .chat-header select {
-            padding: 0.4rem 0.6rem; border: 1px solid #30363d; border-radius: 6px;
-            background: #21262d; color: #c9d1d9; font-size: 0.85rem;
+        .panel-header .title { color: #58a6ff; }
+        .panel-header .spacer { flex: 1; }
+        .panel-header select, .panel-header button {
+            padding: 0.35rem 0.6rem; border: 1px solid #30363d; border-radius: 4px;
+            background: #21262d; color: #c9d1d9; font-size: 0.8rem; cursor: pointer;
         }
-        .messages { flex: 1; overflow-y: auto; padding: 1rem; }
-        .message { margin: 0.75rem 0; padding: 0.75rem 1rem; border-radius: 8px; line-height: 1.6; }
-        .message.user { background: #1f6feb33; margin-left: 10%; border: 1px solid #1f6feb55; }
-        .message.assistant { background: #21262d; margin-right: 5%; }
-        .message p { margin: 0.5rem 0; }
-        .message pre { background: #161b22; padding: 0.75rem; border-radius: 6px; overflow-x: auto; margin: 0.75rem 0; }
-        .message code { font-family: 'Fira Code', 'Consolas', monospace; font-size: 0.85rem; }
-        .message ul, .message ol { margin: 0.5rem 0 0.5rem 1.5rem; }
-        .input-area { padding: 1rem; background: #161b22; border-top: 1px solid #30363d; display: flex; gap: 0.5rem; }
+        .panel-header button:hover { background: #30363d; }
+        .panel-header button.primary { background: #238636; border-color: #238636; }
+        .panel-header button.primary:hover { background: #2ea043; }
+        
+        /* Chat Panel */
+        .chat-panel { width: 30%; min-width: 280px; }
+        .messages { flex: 1; overflow-y: auto; padding: 0.75rem; }
+        .message { margin: 0.5rem 0; padding: 0.6rem 0.8rem; border-radius: 6px; font-size: 0.9rem; line-height: 1.5; }
+        .message.user { background: #1f6feb22; margin-left: 8%; border: 1px solid #1f6feb44; }
+        .message.assistant { background: #21262d; }
+        .message p { margin: 0.4rem 0; }
+        .message pre { background: #161b22; padding: 0.5rem; border-radius: 4px; overflow-x: auto; margin: 0.5rem 0; font-size: 0.8rem; }
+        .message code { font-family: 'Fira Code', monospace; font-size: 0.8rem; }
+        .message ul, .message ol { margin: 0.4rem 0 0.4rem 1.25rem; font-size: 0.85rem; }
+        .input-area { padding: 0.75rem; background: #161b22; border-top: 1px solid #30363d; display: flex; gap: 0.5rem; }
         .input-area textarea { 
-            flex: 1; padding: 0.75rem; border: 1px solid #30363d; border-radius: 6px;
-            background: #0d1117; color: #c9d1d9; resize: none; font-family: inherit;
-            font-size: 0.95rem; line-height: 1.4;
+            flex: 1; padding: 0.6rem; border: 1px solid #30363d; border-radius: 4px;
+            background: #0d1117; color: #c9d1d9; resize: none; font-family: inherit; font-size: 0.9rem;
         }
         .input-area textarea:focus { outline: none; border-color: #58a6ff; }
-        .btn {
-            padding: 0.5rem 1rem; background: #21262d; border: 1px solid #30363d;
-            border-radius: 6px; color: #c9d1d9; cursor: pointer; font-size: 0.85rem;
+        .input-area button {
+            padding: 0.5rem 1rem; background: #238636; border: none;
+            border-radius: 4px; color: #fff; cursor: pointer; font-size: 0.85rem;
         }
-        .btn:hover { background: #30363d; }
-        .btn.primary { background: #238636; border-color: #238636; color: #fff; }
-        .btn.primary:hover { background: #2ea043; }
+        .input-area button:hover { background: #2ea043; }
         
-        /* Document Panel - Right */
-        .doc-panel { 
-            flex: 1; display: flex; flex-direction: column; 
-            background: #0d1117; min-width: 0;
+        /* Whiteboard Panel */
+        .whiteboard-panel { width: 35%; min-width: 300px; }
+        .whiteboard-area { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+        .whiteboard-input {
+            flex: 1; display: flex; flex-direction: column;
         }
-        .doc-tabs { 
+        .whiteboard-input textarea {
+            flex: 1; padding: 1rem; border: none; background: #0d1117; color: #c9d1d9;
+            font-family: 'Fira Code', monospace; font-size: 0.9rem; resize: none; line-height: 1.5;
+        }
+        .whiteboard-input textarea:focus { outline: none; }
+        .whiteboard-preview {
+            height: 45%; border-top: 1px solid #30363d; overflow-y: auto;
+            padding: 1rem; background: #161b22;
+        }
+        .whiteboard-preview .mermaid { background: transparent; }
+        .whiteboard-preview .katex-display { margin: 0.5rem 0; }
+        .whiteboard-preview .error { color: #f85149; font-size: 0.85rem; }
+        
+        /* Spec Panel */
+        .spec-panel { flex: 1; min-width: 300px; }
+        .spec-tabs { 
             display: flex; background: #161b22; border-bottom: 1px solid #30363d;
         }
-        .doc-tab { 
-            padding: 0.75rem 1.5rem; cursor: pointer; 
+        .spec-tab { 
+            padding: 0.6rem 1.25rem; cursor: pointer; 
             border-bottom: 2px solid transparent;
-            font-size: 0.9rem; color: #8b949e;
+            font-size: 0.85rem; color: #8b949e;
         }
-        .doc-tab:hover { color: #c9d1d9; }
-        .doc-tab.active { color: #58a6ff; border-bottom-color: #58a6ff; }
+        .spec-tab:hover { color: #c9d1d9; }
+        .spec-tab.active { color: #58a6ff; border-bottom-color: #58a6ff; }
+        .spec-content { flex: 1; overflow-y: auto; padding: 1.25rem; }
         
-        .doc-content {
-            flex: 1; overflow-y: auto; padding: 1.5rem;
-        }
+        /* Markdown styles */
+        .markdown { color: #c9d1d9; line-height: 1.6; }
+        .markdown h1 { color: #58a6ff; font-size: 1.5rem; margin: 1.25rem 0 0.75rem; padding-bottom: 0.25em; border-bottom: 1px solid #30363d; }
+        .markdown h2 { color: #58a6ff; font-size: 1.2rem; margin: 1.25rem 0 0.5rem; padding-bottom: 0.25em; border-bottom: 1px solid #30363d; }
+        .markdown h3 { color: #8b949e; font-size: 1rem; margin: 1rem 0 0.4rem; }
+        .markdown p { margin: 0.6rem 0; }
+        .markdown pre { background: #161b22; padding: 0.75rem; border-radius: 4px; overflow-x: auto; margin: 0.75rem 0; border: 1px solid #30363d; }
+        .markdown code { font-family: 'Fira Code', monospace; font-size: 0.85rem; color: #79c0ff; }
+        .markdown pre code { color: #c9d1d9; }
+        .markdown ul, .markdown ol { margin: 0.6rem 0 0.6rem 1.5rem; }
+        .markdown li { margin: 0.25rem 0; }
+        .markdown table { border-collapse: collapse; width: 100%; margin: 0.75rem 0; font-size: 0.9rem; }
+        .markdown th, .markdown td { border: 1px solid #30363d; padding: 0.4rem 0.6rem; text-align: left; }
+        .markdown th { background: #161b22; color: #58a6ff; }
+        .markdown .mermaid { background: #161b22; padding: 0.75rem; border-radius: 4px; margin: 0.75rem 0; }
         
-        /* Dark mode markdown */
-        .doc-content.markdown {
-            color: #c9d1d9; line-height: 1.7;
-        }
-        .doc-content.markdown h1 { color: #58a6ff; font-size: 1.8rem; margin: 1.5rem 0 1rem; padding-bottom: 0.3em; border-bottom: 1px solid #30363d; }
-        .doc-content.markdown h2 { color: #58a6ff; font-size: 1.4rem; margin: 1.5rem 0 0.75rem; padding-bottom: 0.3em; border-bottom: 1px solid #30363d; }
-        .doc-content.markdown h3 { color: #8b949e; font-size: 1.15rem; margin: 1.25rem 0 0.5rem; }
-        .doc-content.markdown p { margin: 0.75rem 0; }
-        .doc-content.markdown pre { background: #161b22; padding: 1rem; border-radius: 6px; overflow-x: auto; margin: 1rem 0; border: 1px solid #30363d; }
-        .doc-content.markdown code { font-family: 'Fira Code', 'Consolas', monospace; font-size: 0.9rem; color: #79c0ff; }
-        .doc-content.markdown pre code { color: #c9d1d9; }
-        .doc-content.markdown ul, .doc-content.markdown ol { margin: 0.75rem 0 0.75rem 1.5rem; }
-        .doc-content.markdown li { margin: 0.35rem 0; }
-        .doc-content.markdown strong { color: #f0f6fc; }
-        .doc-content.markdown em { color: #8b949e; }
-        .doc-content.markdown blockquote { border-left: 3px solid #30363d; padding-left: 1rem; color: #8b949e; margin: 1rem 0; }
-        .doc-content.markdown table { border-collapse: collapse; width: 100%; margin: 1rem 0; }
-        .doc-content.markdown th, .doc-content.markdown td { border: 1px solid #30363d; padding: 0.5rem 0.75rem; text-align: left; }
-        .doc-content.markdown th { background: #161b22; color: #58a6ff; }
-        .doc-content.markdown .mermaid { background: #161b22; padding: 1rem; border-radius: 6px; margin: 1rem 0; }
-        
-        /* Property status */
-        .doc-content.markdown .prop-pass { color: #3fb950; }
-        .doc-content.markdown .prop-fail { color: #f85149; }
-        .doc-content.markdown .prop-check { display: inline-block; margin-right: 0.5rem; }
-        
-        /* Code view */
-        .doc-content.code pre { 
+        .code-view pre { 
             background: #161b22; color: #c9d1d9; padding: 1rem; 
-            border-radius: 6px; margin: 0; font-size: 0.9rem;
-            white-space: pre-wrap; word-wrap: break-word;
-            border: 1px solid #30363d;
+            border-radius: 4px; margin: 0; font-size: 0.85rem;
+            white-space: pre-wrap; word-wrap: break-word; border: 1px solid #30363d;
         }
         
-        .empty-state {
-            display: flex; align-items: center; justify-content: center;
-            height: 100%; color: #8b949e; font-style: italic;
-        }
-        
-        .loading { color: #8b949e; }
+        .empty-state { display: flex; align-items: center; justify-content: center; height: 100%; color: #8b949e; font-style: italic; }
     </style>
 </head>
 <body>
-    <div class="chat-panel">
-        <div class="chat-header">
-            <span class="title">🔷 BoundedLISP</span>
+    <!-- Chat Panel -->
+    <div class="panel chat-panel">
+        <div class="panel-header">
+            <span class="title">💬 Chat</span>
             <span class="spacer"></span>
             <select id="provider">
                 <option value="anthropic">Claude</option>
@@ -3221,55 +3296,189 @@ const indexHTML = `<!DOCTYPE html>
         </div>
         <div class="messages" id="messages">
             <div class="message assistant">
-                <p>Describe your multi-party protocol or distributed system. I'll help you specify it formally.</p>
-                <p>After each message, I'll generate a complete specification document with:</p>
-                <ul>
-                    <li>Actor state machines (EFSMs)</li>
-                    <li>Interaction/sequence diagrams</li>
-                    <li>Verified properties with ✓/✗ status</li>
-                    <li>Executable LISP code</li>
-                </ul>
+                <p>Let's design a protocol together.</p>
+                <p>Use the <strong>Whiteboard</strong> to sketch ideas - state machines, message flows, math. When ready, click "Formalize" to turn sketches into LISP.</p>
             </div>
         </div>
         <div class="input-area">
-            <textarea id="input" rows="3" placeholder="Describe your system..."></textarea>
-            <button class="btn primary" onclick="sendMessage()">Send</button>
+            <textarea id="input" rows="2" placeholder="Describe or ask..."></textarea>
+            <button onclick="sendMessage()">Send</button>
         </div>
     </div>
-    <div class="doc-panel">
-        <div class="doc-tabs">
-            <div class="doc-tab active" onclick="showTab('markdown')">📖 Specification</div>
-            <div class="doc-tab" onclick="showTab('code')">💻 LISP</div>
+    
+    <!-- Whiteboard Panel -->
+    <div class="panel whiteboard-panel">
+        <div class="panel-header">
+            <span class="title">📝 Whiteboard</span>
+            <span class="spacer"></span>
+            <button onclick="clearWhiteboard()">Clear</button>
+            <button class="primary" onclick="formalizeWhiteboard()">Formalize →</button>
         </div>
-        <div class="doc-content markdown" id="docContent">
-            <div class="empty-state">Specification document will appear here...</div>
+        <div class="whiteboard-area">
+            <div class="whiteboard-input">
+                <textarea id="whiteboard" placeholder="Sketch your ideas here...
+
+Examples:
+─────────────────────────────────
+STATE MACHINE:
+  Client: Idle --(send request)--> Waiting
+  Client: Waiting --(receive response)--> Idle
+
+SEQUENCE:
+  Client -> Server: request
+  Server -> Client: response
+
+MATH (LaTeX):
+  $P(success) = 1 - e^{-\lambda t}$
+
+ACTORS:
+  - Client: sends requests, tracks pending
+  - Server: processes queue, sends responses
+─────────────────────────────────"></textarea>
+            </div>
+            <div class="whiteboard-preview" id="preview">
+                <div class="empty-state">Live preview appears here...</div>
+            </div>
         </div>
     </div>
+    
+    <!-- Specification Panel -->
+    <div class="panel spec-panel">
+        <div class="panel-header">
+            <span class="title">📋 Specification</span>
+        </div>
+        <div class="spec-tabs">
+            <div class="spec-tab active" onclick="showTab('markdown')">Document</div>
+            <div class="spec-tab" onclick="showTab('code')">LISP</div>
+        </div>
+        <div class="spec-content markdown" id="specContent">
+            <div class="empty-state">Formal specification will appear here...</div>
+        </div>
+    </div>
+
     <script>
         mermaid.initialize({ 
             startOnLoad: false, 
             theme: 'dark',
             themeVariables: {
-                primaryColor: '#1f6feb',
-                primaryTextColor: '#c9d1d9',
-                primaryBorderColor: '#30363d',
-                lineColor: '#8b949e',
-                secondaryColor: '#21262d',
-                tertiaryColor: '#161b22',
-                background: '#0d1117',
-                mainBkg: '#161b22',
-                nodeBorder: '#30363d',
-                clusterBkg: '#21262d',
-                titleColor: '#58a6ff',
-                edgeLabelBackground: '#21262d'
+                primaryColor: '#1f6feb', primaryTextColor: '#c9d1d9', primaryBorderColor: '#30363d',
+                lineColor: '#8b949e', secondaryColor: '#21262d', tertiaryColor: '#161b22',
+                background: '#0d1117', mainBkg: '#161b22', nodeBorder: '#30363d',
+                clusterBkg: '#21262d', titleColor: '#58a6ff', edgeLabelBackground: '#21262d'
             }
         });
         marked.setOptions({ gfm: true, breaks: true });
         
         let sessionId = 'session-' + Date.now();
         let currentTab = 'markdown';
-        let currentDoc = '';      // LISP code
-        let currentMarkdown = ''; // Full specification markdown
+        let currentDoc = '';
+        let currentMarkdown = '';
+        
+        // Whiteboard preview with debounce
+        let previewTimeout;
+        document.getElementById('whiteboard').addEventListener('input', () => {
+            clearTimeout(previewTimeout);
+            previewTimeout = setTimeout(updatePreview, 300);
+        });
+        
+        function updatePreview() {
+            const text = document.getElementById('whiteboard').value;
+            const preview = document.getElementById('preview');
+            
+            if (!text.trim()) {
+                preview.innerHTML = '<div class="empty-state">Live preview appears here...</div>';
+                return;
+            }
+            
+            let html = '';
+            
+            // Try to render as mermaid if it looks like a diagram
+            if (text.includes('-->') || text.includes('->>') || text.includes('graph') || text.includes('sequenceDiagram') || text.includes('stateDiagram')) {
+                const mermaidCode = extractMermaid(text);
+                if (mermaidCode) {
+                    html += '<div class="mermaid" id="preview-mermaid">' + mermaidCode + '</div>';
+                }
+            }
+            
+            // Render LaTeX
+            const latexRendered = renderLatex(text);
+            if (latexRendered !== text) {
+                html += '<div class="latex-content">' + latexRendered + '</div>';
+            }
+            
+            // If nothing special, just show as preformatted
+            if (!html) {
+                html = '<pre style="color:#c9d1d9;font-size:0.85rem;white-space:pre-wrap;">' + escapeHtml(text) + '</pre>';
+            }
+            
+            preview.innerHTML = html;
+            
+            // Run mermaid
+            setTimeout(() => {
+                try { mermaid.run(); } catch(e) { console.log('Mermaid error:', e); }
+            }, 50);
+        }
+        
+        function extractMermaid(text) {
+            // Auto-detect and wrap in mermaid syntax
+            const lines = text.split('\n').map(l => l.trim()).filter(l => l);
+            
+            // Check for sequence diagram patterns
+            if (lines.some(l => l.includes('->') && l.includes(':'))) {
+                const seqLines = lines.filter(l => l.includes('->') && l.includes(':'));
+                if (seqLines.length > 0) {
+                    return 'sequenceDiagram\\n' + seqLines.map(l => {
+                        const m = l.match(/(\w+)\s*->\s*(\w+)\s*:\s*(.+)/);
+                        if (m) return '    ' + m[1] + '->>' + m[2] + ': ' + m[3];
+                        return '';
+                    }).filter(l => l).join('\\n');
+                }
+            }
+            
+            // Check for state machine patterns
+            if (lines.some(l => l.includes('--') && l.includes('-->'))) {
+                const stateLines = lines.filter(l => l.includes('-->'));
+                if (stateLines.length > 0) {
+                    return 'stateDiagram-v2\\n' + stateLines.map(l => {
+                        const m = l.match(/(\w+)\s*--.*?-->\s*(\w+)/);
+                        if (m) return '    ' + m[1] + ' --> ' + m[2];
+                        return '    ' + l.replace(/--\(([^)]+)\)-->/, ' --> ').trim();
+                    }).join('\\n');
+                }
+            }
+            
+            // Already valid mermaid
+            if (text.includes('sequenceDiagram') || text.includes('stateDiagram') || text.includes('graph') || text.includes('flowchart')) {
+                return text;
+            }
+            
+            return null;
+        }
+        
+        function renderLatex(text) {
+            // Replace $...$ with rendered KaTeX
+            return text.replace(/\$([^$]+)\$/g, (match, latex) => {
+                try {
+                    return katex.renderToString(latex, { throwOnError: false });
+                } catch (e) {
+                    return '<span class="error">' + escapeHtml(match) + '</span>';
+                }
+            });
+        }
+        
+        function clearWhiteboard() {
+            document.getElementById('whiteboard').value = '';
+            document.getElementById('preview').innerHTML = '<div class="empty-state">Live preview appears here...</div>';
+        }
+        
+        function formalizeWhiteboard() {
+            const sketch = document.getElementById('whiteboard').value.trim();
+            if (!sketch) return;
+            
+            const prompt = 'Please formalize this whiteboard sketch into a complete specification:\\n\\n' + sketch;
+            document.getElementById('input').value = prompt;
+            sendMessage();
+        }
         
         async function sendMessage() {
             const input = document.getElementById('input');
@@ -3277,49 +3486,40 @@ const indexHTML = `<!DOCTYPE html>
             if (!message) return;
             
             const provider = document.getElementById('provider').value;
-            
             addMessage('user', message);
             input.value = '';
             
-            const loadingDiv = document.createElement('div');
-            loadingDiv.className = 'message assistant loading';
-            loadingDiv.innerHTML = '<p><em>Generating specification...</em></p>';
-            loadingDiv.id = 'loading';
-            document.getElementById('messages').appendChild(loadingDiv);
-            loadingDiv.scrollIntoView({ behavior: 'smooth' });
+            const loading = document.createElement('div');
+            loading.className = 'message assistant';
+            loading.innerHTML = '<p><em>Thinking...</em></p>';
+            loading.id = 'loading';
+            document.getElementById('messages').appendChild(loading);
+            loading.scrollIntoView({ behavior: 'smooth' });
             
             try {
                 const resp = await fetch('/chat', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        session_id: sessionId,
-                        message: message,
-                        provider: provider
-                    })
+                    body: JSON.stringify({ session_id: sessionId, message, provider })
                 });
                 
                 document.getElementById('loading')?.remove();
-                
                 if (!resp.ok) throw new Error(await resp.text());
                 
                 const data = await resp.json();
+                addMessage('assistant', data.chat_response || 'Updated.');
                 
-                // Short acknowledgment in chat
-                addMessage('assistant', data.chat_response || 'Updated specification.');
-                
-                // Full markdown document in panel
                 if (data.markdown) {
                     currentMarkdown = data.markdown;
-                    updateDocPanel();
+                    if (currentTab === 'markdown') updateSpecPanel();
                 }
                 if (data.current_doc) {
                     currentDoc = data.current_doc;
-                    if (currentTab === 'code') updateDocPanel();
+                    if (currentTab === 'code') updateSpecPanel();
                 }
             } catch (err) {
                 document.getElementById('loading')?.remove();
-                addMessage('assistant', '❌ Error: ' + err.message);
+                addMessage('assistant', '❌ ' + err.message);
             }
         }
         
@@ -3331,31 +3531,28 @@ const indexHTML = `<!DOCTYPE html>
             div.scrollIntoView({ behavior: 'smooth' });
         }
         
-        function updateDocPanel() {
-            const container = document.getElementById('docContent');
+        function updateSpecPanel() {
+            const container = document.getElementById('specContent');
             
             if (currentTab === 'markdown') {
-                container.className = 'doc-content markdown';
+                container.className = 'spec-content markdown';
                 if (!currentMarkdown) {
-                    container.innerHTML = '<div class="empty-state">Specification document will appear here...</div>';
+                    container.innerHTML = '<div class="empty-state">Formal specification will appear here...</div>';
                     return;
                 }
                 container.innerHTML = marked.parse(currentMarkdown);
-                
-                // Render mermaid diagrams
                 setTimeout(() => {
                     container.querySelectorAll('pre code.language-mermaid').forEach((el, i) => {
                         const wrapper = document.createElement('div');
                         wrapper.className = 'mermaid';
-                        wrapper.id = 'mermaid-' + Date.now() + '-' + i;
+                        wrapper.id = 'mermaid-spec-' + Date.now() + '-' + i;
                         wrapper.textContent = el.textContent;
                         el.parentElement.replaceWith(wrapper);
                     });
                     mermaid.run();
                 }, 50);
-                
-            } else if (currentTab === 'code') {
-                container.className = 'doc-content code';
+            } else {
+                container.className = 'spec-content code-view';
                 if (!currentDoc) {
                     container.innerHTML = '<div class="empty-state">LISP code will appear here...</div>';
                     return;
@@ -3366,9 +3563,9 @@ const indexHTML = `<!DOCTYPE html>
         
         function showTab(tab) {
             currentTab = tab;
-            document.querySelectorAll('.doc-tab').forEach(t => t.classList.remove('active'));
+            document.querySelectorAll('.spec-tab').forEach(t => t.classList.remove('active'));
             event.target.classList.add('active');
-            updateDocPanel();
+            updateSpecPanel();
         }
         
         function escapeHtml(text) {
@@ -3376,10 +3573,7 @@ const indexHTML = `<!DOCTYPE html>
         }
         
         document.getElementById('input').addEventListener('keydown', e => {
-            if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault();
-                sendMessage();
-            }
+            if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
         });
     </script>
 </body>
