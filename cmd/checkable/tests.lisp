@@ -581,6 +581,32 @@
 (assert-nil (assoc 'd '((a 1) (b 2))) "assoc not found")
 
 ; ============================================================================
+; Scoping Tests
+; ============================================================================
+
+(test-section "Scoping")
+
+; Local function via let+lambda stays local
+(define *scope-test-result* nil)
+
+(define (test-local-fn)
+  (let helper (lambda (x) (* x 2))
+    (set! *scope-test-result* (helper 5))
+    *scope-test-result*))
+
+(test-local-fn)
+(assert-eq *scope-test-result* 10 "let+lambda local function works")
+
+; Closures capture environment correctly
+(define (make-adder-safe n)
+  (lambda (x) (+ n x)))
+
+(define add3 (make-adder-safe 3))
+(define add7 (make-adder-safe 7))
+(assert-eq (add3 10) 13 "closure captures n=3")
+(assert-eq (add7 10) 17 "closure captures n=7")
+
+; ============================================================================
 ; Summary
 ; ============================================================================
 
