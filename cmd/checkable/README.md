@@ -1,17 +1,29 @@
 # BoundedLISP
 
-A tool for specifying and verifying multi-party protocols through conversation.
+A philosophy calculator for temporal logic and protocol design.
 
-## What It Does
+## What Is This?
 
-You describe a distributed system or protocol in plain English. The tool helps you:
+Most temporal logic tools (NuSMV, SPIN, TLA+) require you to already know what you want to specify. They're verification tools, not thinking tools.
 
-1. **Sketch ideas** on a shared whiteboard (LaTeX, state machines, message flows)
-2. **Formalize** those sketches into executable actor specifications
-3. **Verify** properties using CTL model checking
-4. **Visualize** with automatically generated diagrams
+BoundedLISP is different. It's a **conversational specification environment** where you:
 
-Think of it as pair-programming for protocol design. You and the AI are in a conference room with a whiteboard, working toward a formal specification.
+1. **Sketch** half-formed ideas on a whiteboard (state machines, message flows, LaTeX math)
+2. **Discuss** with an AI to refine your thinking  
+3. **Formalize** sketches into executable actor specifications
+4. **Verify** properties using CTL model checking
+5. **Iterate** until the specification captures your intent
+
+Think of it as pair-programming for protocol design. You and the AI are in a conference room with a whiteboard, working toward a formal specification that you might not have been able to write directly.
+
+## Why Temporal Logic?
+
+Temporal logic lets you express properties like:
+- "Every request **eventually** gets a response" — `AG(request → AF(response))`
+- "The system **never** deadlocks" — `AG(EX(true))`  
+- "Once started, the protocol **always** terminates" — `AF(done)`
+
+These are the properties that matter for distributed systems, protocols, and concurrent programs. But temporal logic is rarely accessible outside academic papers and expert tools.
 
 ## Quick Start
 
@@ -25,6 +37,32 @@ go run main.go
 
 # Open http://localhost:8080 in browser
 ```
+
+## The Language
+
+**BoundedLISP is its own dialect** - not Scheme, not Common Lisp. Key differences:
+
+| Feature | Scheme | Common Lisp | BoundedLISP |
+|---------|--------|-------------|-------------|
+| False values | `#f` only | `nil` only | `nil`, `false`, `'()`, `0`, `""` |
+| Booleans | `#t`/`#f` | `t`/`nil` | `true`/`false` |
+| Simple let | `(let ((x 1)) ...)` | `(let ((x 1)) ...)` | `(let x 1 ...)` |
+| Else in cond | `else` | `t` | `true` |
+
+See [DIALECT.md](DIALECT.md) for the complete language reference.
+
+## Compared to Other Tools
+
+| Tool | Approach | Learning Curve | Conversation? |
+|------|----------|----------------|---------------|
+| **NuSMV** | SMV input language | Steep | No |
+| **SPIN** | Promela + LTL | Steep | No |
+| **TLA+** | Mathematical notation | Very steep | No |
+| **Alloy** | Relational logic | Moderate | No |
+| **LogiCola** | Educational exercises | Low | No |
+| **BoundedLISP** | Actors + CTL | Low | **Yes** |
+
+The key difference: you don't need to know temporal logic to start. Describe what you want, sketch on the whiteboard, and let the conversation lead you to a formal specification.
 
 ## Usage Modes
 
@@ -130,7 +168,8 @@ For modeling stochastic systems:
 |------|---------|
 | `main.go` | Interpreter, scheduler, web server |
 | `prologue.lisp` | Runtime library (actors, CTL, distributions) |
-| `tests.lisp` | 155 unit tests |
+| `tests.lisp` | 158 unit tests |
+| `DIALECT.md` | Complete language reference |
 
 ## Environment Variables
 
@@ -147,6 +186,14 @@ make test
 # or
 cat prologue.lisp tests.lisp | go run main.go -repl
 ```
+
+## Why "Philosophy Calculator"?
+
+Temporal logic—reasoning about what *must* happen, what *might* happen, what happens *eventually* or *always*—has been studied by philosophers and logicians for decades. But the tools to actually *compute* with these ideas have remained locked in academic silos.
+
+A calculator democratized arithmetic. A spreadsheet democratized financial modeling. BoundedLISP aims to democratize temporal reasoning about systems.
+
+You shouldn't need a PhD to ask "will my protocol eventually terminate?" or "can this system deadlock?" You should be able to sketch your intuition, have a conversation, and arrive at a formal answer.
 
 ## License
 

@@ -2529,6 +2529,8 @@ type Session struct {
 	Versions     []DocVersion
 	CurrentDoc   string
 	CreatedAt    time.Time
+	InputTokens  int
+	OutputTokens int
 	mu           sync.Mutex
 }
 
@@ -2584,7 +2586,7 @@ func runServer(ev *Evaluator, port string) {
 	hasOpenAI := os.Getenv("OPENAI_API_KEY") != ""
 	
 	fmt.Println("╔════════════════════════════════════════════════════════════╗")
-	fmt.Println("║              BoundedLISP Protocol Designer                 ║")
+	fmt.Println("║            BoundedLISP - Philosophy Calculator              ║")
 	fmt.Println("╠════════════════════════════════════════════════════════════╣")
 	fmt.Printf("║  Web UI: http://localhost:%-33s║\n", port)
 	fmt.Println("╠════════════════════════════════════════════════════════════╣")
@@ -2659,10 +2661,11 @@ func runConsoleChat(hasAnthropic, hasOpenAI bool) {
 		sess.Messages = append(sess.Messages, ChatMessage{Role: "user", Content: line})
 		
 		var response string
+		var inTok, outTok int
 		if provider == "openai" {
-			response, err = callOpenAI(apiKey, sess.Messages)
+			response, inTok, outTok, err = callOpenAI(apiKey, sess.Messages)
 		} else {
-			response, err = callAnthropic(apiKey, sess.Messages)
+			response, inTok, outTok, err = callAnthropic(apiKey, sess.Messages)
 		}
 		
 		if err != nil {
@@ -2671,13 +2674,17 @@ func runConsoleChat(hasAnthropic, hasOpenAI bool) {
 			continue
 		}
 		
+		sess.InputTokens += inTok
+		sess.OutputTokens += outTok
 		sess.Messages = append(sess.Messages, ChatMessage{Role: "assistant", Content: response})
+		totalTokens := sess.InputTokens + sess.OutputTokens
 		sess.mu.Unlock()
 		
 		// Parse and display
 		chat, _, _ := parseStructuredResponse(response)
 		fmt.Println()
 		fmt.Println(chat)
+		fmt.Printf("\n[tokens: %d in + %d out = %d total]\n", sess.InputTokens, sess.OutputTokens, totalTokens)
 	}
 }
 
@@ -2881,18 +2888,23 @@ func handleChat(w http.ResponseWriter, r *http.Request) {
 	
 	// Call LLM
 	var response string
+	var inTok, outTok int
 	var err error
 	
 	if req.Provider == "openai" {
-		response, err = callOpenAI(apiKey, sess.Messages)
+		response, inTok, outTok, err = callOpenAI(apiKey, sess.Messages)
 	} else {
-		response, err = callAnthropic(apiKey, sess.Messages)
+		response, inTok, outTok, err = callAnthropic(apiKey, sess.Messages)
 	}
 	
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	
+	// Track usage
+	sess.InputTokens += inTok
+	sess.OutputTokens += outTok
 	
 	// Add assistant message
 	sess.Messages = append(sess.Messages, ChatMessage{Role: "assistant", Content: response})
@@ -2918,6 +2930,11 @@ func handleChat(w http.ResponseWriter, r *http.Request) {
 		"markdown":      markdown,
 		"current_doc":   sess.CurrentDoc,
 		"version":       len(sess.Versions),
+		"usage": map[string]int{
+			"input_tokens":  sess.InputTokens,
+			"output_tokens": sess.OutputTokens,
+			"total_tokens":  sess.InputTokens + sess.OutputTokens,
+		},
 	})
 }
 
@@ -2967,9 +2984,9 @@ func parseStructuredResponse(response string) (chat, markdown, lisp string) {
 	return
 }
 
-func callAnthropic(apiKey string, messages []ChatMessage) (string, error) {
+func callAnthropic(apiKey string, messages []ChatMessage) (string, int, int, error) {
 	if apiKey == "" {
-		return "", fmt.Errorf("API key required")
+		return "", 0, 0, fmt.Errorf("API key required")
 	}
 	
 	// Build messages array
@@ -2993,32 +3010,36 @@ func callAnthropic(apiKey string, messages []ChatMessage) (string, error) {
 	
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return "", err
+		return "", 0, 0, err
 	}
 	defer resp.Body.Close()
 	
 	respBody, _ := io.ReadAll(resp.Body)
 	
 	if resp.StatusCode != 200 {
-		return "", fmt.Errorf("API error: %s", string(respBody))
+		return "", 0, 0, fmt.Errorf("API error: %s", string(respBody))
 	}
 	
 	var result struct {
 		Content []struct {
 			Text string `json:"text"`
 		} `json:"content"`
+		Usage struct {
+			InputTokens  int `json:"input_tokens"`
+			OutputTokens int `json:"output_tokens"`
+		} `json:"usage"`
 	}
 	json.Unmarshal(respBody, &result)
 	
 	if len(result.Content) > 0 {
-		return result.Content[0].Text, nil
+		return result.Content[0].Text, result.Usage.InputTokens, result.Usage.OutputTokens, nil
 	}
-	return "", fmt.Errorf("empty response")
+	return "", 0, 0, fmt.Errorf("empty response")
 }
 
-func callOpenAI(apiKey string, messages []ChatMessage) (string, error) {
+func callOpenAI(apiKey string, messages []ChatMessage) (string, int, int, error) {
 	if apiKey == "" {
-		return "", fmt.Errorf("API key required")
+		return "", 0, 0, fmt.Errorf("API key required")
 	}
 	
 	// Build messages with system prompt
@@ -3040,14 +3061,14 @@ func callOpenAI(apiKey string, messages []ChatMessage) (string, error) {
 	
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return "", err
+		return "", 0, 0, err
 	}
 	defer resp.Body.Close()
 	
 	respBody, _ := io.ReadAll(resp.Body)
 	
 	if resp.StatusCode != 200 {
-		return "", fmt.Errorf("API error: %s", string(respBody))
+		return "", 0, 0, fmt.Errorf("API error: %s", string(respBody))
 	}
 	
 	var result struct {
@@ -3056,13 +3077,17 @@ func callOpenAI(apiKey string, messages []ChatMessage) (string, error) {
 				Content string `json:"content"`
 			} `json:"message"`
 		} `json:"choices"`
+		Usage struct {
+			PromptTokens     int `json:"prompt_tokens"`
+			CompletionTokens int `json:"completion_tokens"`
+		} `json:"usage"`
 	}
 	json.Unmarshal(respBody, &result)
 	
 	if len(result.Choices) > 0 {
-		return result.Choices[0].Message.Content, nil
+		return result.Choices[0].Message.Content, result.Usage.PromptTokens, result.Usage.CompletionTokens, nil
 	}
-	return "", fmt.Errorf("empty response")
+	return "", 0, 0, fmt.Errorf("empty response")
 }
 
 func extractSpec(response string) string {
@@ -3208,7 +3233,7 @@ const indexHTML = `<!DOCTYPE html>
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>BoundedLISP</title>
+    <title>BoundedLISP - Philosophy Calculator</title>
     <script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
@@ -3241,6 +3266,12 @@ const indexHTML = `<!DOCTYPE html>
         .panel-header button:hover { background: #30363d; }
         .panel-header button.primary { background: #238636; border-color: #238636; }
         .panel-header button.primary:hover { background: #2ea043; }
+        .panel-header .usage { 
+            font-size: 0.75rem; color: #8b949e; padding: 0.25rem 0.5rem;
+            background: #21262d; border-radius: 4px; margin-right: 0.5rem;
+        }
+        .panel-header .usage.warn { color: #d29922; background: #3d2e00; }
+        .panel-header .usage.danger { color: #f85149; background: #3d0000; }
         
         /* Chat Panel */
         .chat-panel { width: 30%; min-width: 280px; }
@@ -3328,6 +3359,7 @@ const indexHTML = `<!DOCTYPE html>
         <div class="panel-header">
             <span class="title">💬 Chat</span>
             <span class="spacer"></span>
+            <span id="usage" class="usage" title="Session token usage"></span>
             <select id="provider">
                 <option value="anthropic">Claude</option>
                 <option value="openai">GPT-4</option>
@@ -3548,6 +3580,11 @@ ACTORS:
                 const data = await resp.json();
                 addMessage('assistant', data.chat_response || 'Updated.');
                 
+                // Update usage display
+                if (data.usage) {
+                    updateUsage(data.usage);
+                }
+                
                 if (data.markdown) {
                     currentMarkdown = data.markdown;
                     if (currentTab === 'markdown') updateSpecPanel();
@@ -3605,6 +3642,22 @@ ACTORS:
             document.querySelectorAll('.spec-tab').forEach(t => t.classList.remove('active'));
             event.target.classList.add('active');
             updateSpecPanel();
+        }
+        
+        function updateUsage(usage) {
+            const el = document.getElementById('usage');
+            const total = usage.total_tokens || 0;
+            const k = (total / 1000).toFixed(1);
+            el.textContent = k + 'k tokens';
+            
+            // Color code based on usage (rough heuristics)
+            el.className = 'usage';
+            if (total > 50000) {
+                el.className = 'usage danger';
+                el.textContent = k + 'k ⚠️';
+            } else if (total > 25000) {
+                el.className = 'usage warn';
+            }
         }
         
         function escapeHtml(text) {
