@@ -3368,7 +3368,7 @@ const indexHTML = `<!DOCTYPE html>
         <div class="messages" id="messages">
             <div class="message assistant">
                 <p>Let's design a protocol together.</p>
-                <p>Use the <strong>Whiteboard</strong> to sketch ideas - state machines, message flows, math. When ready, click "Formalize" to turn sketches into LISP.</p>
+                <p>Use the <strong>Whiteboard</strong> to sketch ideas. Message flows like <code>A -> B: msg</code> and state transitions like <code>X --> Y</code> will render as diagrams. Click <strong>Formalize</strong> when ready.</p>
             </div>
         </div>
         <div class="input-area">
@@ -3389,23 +3389,20 @@ const indexHTML = `<!DOCTYPE html>
             <div class="whiteboard-input">
                 <textarea id="whiteboard" placeholder="Sketch your ideas here...
 
-Examples:
-─────────────────────────────────
-STATE MACHINE:
-  Client: Idle --(send request)--> Waiting
-  Client: Waiting --(receive response)--> Idle
+MESSAGE FLOW (renders as sequence diagram):
+  A -> B: hello
+  B -> A: who are you?
+  A -> B: I am the client
 
-SEQUENCE:
-  Client -> Server: request
-  Server -> Client: response
+STATE TRANSITIONS (renders as state diagram):
+  Idle --> Waiting
+  Waiting --> Done
 
-MATH (LaTeX):
-  $P(success) = 1 - e^{-\lambda t}$
+MATH (renders with LaTeX):
+  $E = mc^2$
 
-ACTORS:
-  - Client: sends requests, tracks pending
-  - Server: processes queue, sends responses
-─────────────────────────────────"></textarea>
+Or just describe your system in plain text
+and click 'Formalize' to let AI interpret it."></textarea>
             </div>
             <div class="whiteboard-preview" id="preview">
                 <div class="empty-state">Live preview appears here...</div>
@@ -3464,7 +3461,11 @@ ACTORS:
             let html = '';
             
             // Try to render as mermaid if it looks like a diagram
-            if (text.includes('-->') || text.includes('->>') || text.includes('graph') || text.includes('sequenceDiagram') || text.includes('stateDiagram')) {
+            const hasMsgPattern = /\w+\s*->\s*\w+\s*:/.test(text);
+            const hasStatePattern = text.includes('-->');
+            const hasMermaidKeyword = text.includes('graph') || text.includes('sequenceDiagram') || text.includes('stateDiagram');
+            
+            if (hasMsgPattern || hasStatePattern || hasMermaidKeyword) {
                 const mermaidCode = extractMermaid(text);
                 if (mermaidCode) {
                     html += '<div class="mermaid" id="preview-mermaid">' + mermaidCode + '</div>';
@@ -3492,29 +3493,54 @@ ACTORS:
         
         function extractMermaid(text) {
             // Auto-detect and wrap in mermaid syntax
-            const lines = text.split('\n').map(l => l.trim()).filter(l => l);
+            const lines = text.split('\n').map(l => l.trim()).filter(l => l && !l.startsWith('#') && !l.toUpperCase().includes('STATE MACHINE') && !l.toUpperCase().includes('SEQUENCE'));
             
-            // Check for sequence diagram patterns
-            if (lines.some(l => l.includes('->') && l.includes(':'))) {
-                const seqLines = lines.filter(l => l.includes('->') && l.includes(':'));
+            // Check for message patterns: A -> B: message or A->B: message
+            const msgPattern = /^(\w+)\s*->\s*(\w+)\s*:\s*(.+?)\.?$/;
+            const msgLines = lines.filter(l => msgPattern.test(l));
+            if (msgLines.length > 0) {
+                const seqLines = msgLines.map(l => {
+                    const m = l.match(msgPattern);
+                    if (m) return '    ' + m[1] + '->>' + m[2] + ': ' + m[3].replace(/\.+$/, '');
+                    return '';
+                }).filter(l => l);
                 if (seqLines.length > 0) {
-                    return 'sequenceDiagram\\n' + seqLines.map(l => {
-                        const m = l.match(/(\w+)\s*->\s*(\w+)\s*:\s*(.+)/);
-                        if (m) return '    ' + m[1] + '->>' + m[2] + ': ' + m[3];
-                        return '';
-                    }).filter(l => l).join('\\n');
+                    return 'sequenceDiagram\n' + seqLines.join('\n');
                 }
             }
             
-            // Check for state machine patterns
-            if (lines.some(l => l.includes('--') && l.includes('-->'))) {
-                const stateLines = lines.filter(l => l.includes('-->'));
-                if (stateLines.length > 0) {
-                    return 'stateDiagram-v2\\n' + stateLines.map(l => {
-                        const m = l.match(/(\w+)\s*--.*?-->\s*(\w+)/);
-                        if (m) return '    ' + m[1] + ' --> ' + m[2];
-                        return '    ' + l.replace(/--\(([^)]+)\)-->/, ' --> ').trim();
-                    }).join('\\n');
+            // Check for state transition patterns: State1 --> State2 or State1 --(action)--> State2
+            const statePattern = /^(\w+)\s*--.*?-->\s*(\w+)|^(\w+)\s*-->\s*(\w+)/;
+            const stateLines = lines.filter(l => statePattern.test(l));
+            if (stateLines.length > 0) {
+                const transitions = stateLines.map(l => {
+                    // Try to extract action from --(action)-->
+                    const withAction = l.match(/(\w+)\s*--\(([^)]+)\)-->\s*(\w+)/);
+                    if (withAction) {
+                        return '    ' + withAction[1] + ' --> ' + withAction[3] + ' : ' + withAction[2];
+                    }
+                    const simple = l.match(/(\w+)\s*-->\s*(\w+)/);
+                    if (simple) {
+                        return '    ' + simple[1] + ' --> ' + simple[2];
+                    }
+                    return '';
+                }).filter(l => l);
+                if (transitions.length > 0) {
+                    return 'stateDiagram-v2\n' + transitions.join('\n');
+                }
+            }
+            
+            // Check for flow patterns: A -> B (no colon, so flowchart)
+            const flowPattern = /^(\w+)\s*->\s*(\w+)$/;
+            const flowLines = lines.filter(l => flowPattern.test(l));
+            if (flowLines.length > 0) {
+                const edges = flowLines.map(l => {
+                    const m = l.match(flowPattern);
+                    if (m) return '    ' + m[1] + ' --> ' + m[2];
+                    return '';
+                }).filter(l => l);
+                if (edges.length > 0) {
+                    return 'graph LR\n' + edges.join('\n');
                 }
             }
             
@@ -3546,7 +3572,26 @@ ACTORS:
             const sketch = document.getElementById('whiteboard').value.trim();
             if (!sketch) return;
             
-            const prompt = 'Please formalize this whiteboard sketch into a complete specification:\\n\\n' + sketch;
+            // Detect what kind of sketch this is
+            let sketchType = 'general notes';
+            if (sketch.includes('->') && sketch.includes(':')) {
+                sketchType = 'message sequence diagram';
+            } else if (sketch.includes('-->')) {
+                sketchType = 'state machine';
+            } else if (sketch.includes('$')) {
+                sketchType = 'mathematical formulas';
+            } else if (sketch.toLowerCase().includes('actor') || sketch.toLowerCase().includes('server') || sketch.toLowerCase().includes('client')) {
+                sketchType = 'actor descriptions';
+            }
+            
+            const prompt = 'I sketched this on the whiteboard (looks like ' + sketchType + '):\n\n' +
+                sketch + '\n\n' +
+                'Please:\n' +
+                '1. Interpret what I am trying to express\n' +
+                '2. Create proper mermaid diagrams for it (sequence diagrams for message flows, state diagrams for state machines)\n' +
+                '3. Define actors and their behaviors in BoundedLISP\n' +
+                '4. Suggest relevant CTL properties to verify';
+            
             document.getElementById('input').value = prompt;
             sendMessage();
         }
