@@ -2842,7 +2842,15 @@ Return values from actor body:
 - Each actor gets their own state machine diagram
 - Properties need English descriptions
 - Keep chat responses brief - the document tells the full story
-- Remember: empty list IS falsey in BoundedLISP`
+- Remember: empty list IS falsey in BoundedLISP
+
+## Incremental Updates
+
+When the user provides their current LISP specification alongside a new sketch:
+- Focus on what changed - don't regenerate everything
+- Preserve working code and properties
+- In your chat response, briefly explain what you modified
+- Only change the parts that need updating based on the new sketch`
 
 func handleIndex(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html")
@@ -3193,6 +3201,72 @@ func handleEval(ev *Evaluator) http.HandlerFunc {
 
 func handleDiagram(ev *Evaluator) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		// POST: AI-powered sketch interpretation
+		if r.Method == "POST" {
+			var req struct {
+				Sketch   string `json:"sketch"`
+				Provider string `json:"provider"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			
+			// Get API key
+			var apiKey string
+			if req.Provider == "openai" {
+				apiKey = os.Getenv("OPENAI_API_KEY")
+			} else {
+				apiKey = os.Getenv("ANTHROPIC_API_KEY")
+			}
+			
+			if apiKey == "" {
+				json.NewEncoder(w).Encode(map[string]string{"error": "No API key configured"})
+				return
+			}
+			
+			// Ask LLM to interpret sketch and generate mermaid
+			prompt := `Interpret this whiteboard sketch and generate a Mermaid diagram.
+The sketch may contain:
+- Message flows like "A -> B: message" 
+- State transitions like "Idle --> Waiting"
+- Natural language commands like "color X red" or "make it horizontal"
+
+Apply any commands/instructions you find to the diagram.
+
+Respond with ONLY the mermaid diagram code, no explanation, no markdown fences.
+
+Sketch:
+` + req.Sketch
+			
+			messages := []ChatMessage{{Role: "user", Content: prompt}}
+			
+			var response string
+			var err error
+			if req.Provider == "openai" {
+				response, _, _, err = callOpenAI(apiKey, messages)
+			} else {
+				response, _, _, err = callAnthropic(apiKey, messages)
+			}
+			
+			if err != nil {
+				json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+				return
+			}
+			
+			// Clean up response - remove any markdown fences
+			response = strings.TrimSpace(response)
+			response = strings.TrimPrefix(response, "```mermaid")
+			response = strings.TrimPrefix(response, "```")
+			response = strings.TrimSuffix(response, "```")
+			response = strings.TrimSpace(response)
+			
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]string{"mermaid": response})
+			return
+		}
+		
+		// GET: Grammar-based diagram generation (legacy)
 		grammarName := r.URL.Query().Get("grammar")
 		diagramType := r.URL.Query().Get("type")
 		if diagramType == "" {
@@ -3383,26 +3457,25 @@ const indexHTML = `<!DOCTYPE html>
             <span class="title">📝 Whiteboard</span>
             <span class="spacer"></span>
             <button onclick="clearWhiteboard()">Clear</button>
-            <button class="primary" onclick="formalizeWhiteboard()">Formalize →</button>
+            <button onclick="aiPreview()" title="AI interprets sketch + commands">✨ AI</button>
+            <button id="newSpecBtn" style="display:none" onclick="newSpec()">New</button>
+            <button class="primary" id="formalizeBtn" onclick="formalizeWhiteboard()">Formalize →</button>
         </div>
         <div class="whiteboard-area">
             <div class="whiteboard-input">
-                <textarea id="whiteboard" placeholder="Sketch your ideas here...
+                <textarea id="whiteboard" placeholder="Sketch + commands...
 
-MESSAGE FLOW (renders as sequence diagram):
+DIAGRAM NOTATION:
   A -> B: hello
-  B -> A: who are you?
-  A -> B: I am the client
+  C -> B: let us pass
 
-STATE TRANSITIONS (renders as state diagram):
-  Idle --> Waiting
-  Waiting --> Done
+COMMANDS (AI interprets these):
+  color A red, B white, C blue
+  make it vertical
+  add a note: negotiation phase
 
-MATH (renders with LaTeX):
-  $E = mc^2$
-
-Or just describe your system in plain text
-and click 'Formalize' to let AI interpret it."></textarea>
+Click '✨ AI' to have AI interpret and render.
+Click 'Formalize' for full LISP spec."></textarea>
             </div>
             <div class="whiteboard-preview" id="preview">
                 <div class="empty-state">Live preview appears here...</div>
@@ -3437,6 +3510,7 @@ and click 'Formalize' to let AI interpret it."></textarea>
         });
         marked.setOptions({ gfm: true, breaks: true });
         
+        const NL = String.fromCharCode(10);  // Newline for mermaid
         let sessionId = 'session-' + Date.now();
         let currentTab = 'markdown';
         let currentDoc = '';
@@ -3485,15 +3559,27 @@ and click 'Formalize' to let AI interpret it."></textarea>
             
             preview.innerHTML = html;
             
-            // Run mermaid
-            setTimeout(() => {
-                try { mermaid.run(); } catch(e) { console.log('Mermaid error:', e); }
-            }, 50);
+            // Run mermaid with error handling
+            if (html.includes('class="mermaid"')) {
+                setTimeout(async () => {
+                    try { 
+                        await mermaid.run(); 
+                    } catch(e) { 
+                        console.log('Mermaid error:', e);
+                        // Show the raw mermaid code on error
+                        const mermaidDiv = document.getElementById('preview-mermaid');
+                        if (mermaidDiv && e.message) {
+                            mermaidDiv.innerHTML = '<pre style="color:#f85149;font-size:0.75rem;">Mermaid error: ' + e.message + '</pre>' +
+                                '<pre style="color:#8b949e;font-size:0.75rem;">' + escapeHtml(mermaidDiv.textContent) + '</pre>';
+                        }
+                    }
+                }, 50);
+            }
         }
         
         function extractMermaid(text) {
             // Auto-detect and wrap in mermaid syntax
-            const lines = text.split('\n').map(l => l.trim()).filter(l => l && !l.startsWith('#') && !l.toUpperCase().includes('STATE MACHINE') && !l.toUpperCase().includes('SEQUENCE'));
+            const lines = text.split('\n').map(l => l.trim());
             
             // Check for message patterns: A -> B: message or A->B: message
             const msgPattern = /^(\w+)\s*->\s*(\w+)\s*:\s*(.+?)\.?$/;
@@ -3501,11 +3587,16 @@ and click 'Formalize' to let AI interpret it."></textarea>
             if (msgLines.length > 0) {
                 const seqLines = msgLines.map(l => {
                     const m = l.match(msgPattern);
-                    if (m) return '    ' + m[1] + '->>' + m[2] + ': ' + m[3].replace(/\.+$/, '');
+                    if (m) {
+                        // Clean message for mermaid - keep alphanumeric, spaces, basic punct
+                        let msg = m[3].replace(/\.+$/, '').trim();
+                        msg = msg.replace(/[^a-zA-Z0-9 ,.!?'-]/g, '');
+                        return '    ' + m[1] + '->>' + m[2] + ': ' + msg;
+                    }
                     return '';
                 }).filter(l => l);
                 if (seqLines.length > 0) {
-                    return 'sequenceDiagram\n' + seqLines.join('\n');
+                    return 'sequenceDiagram' + NL + seqLines.join(NL);
                 }
             }
             
@@ -3526,7 +3617,7 @@ and click 'Formalize' to let AI interpret it."></textarea>
                     return '';
                 }).filter(l => l);
                 if (transitions.length > 0) {
-                    return 'stateDiagram-v2\n' + transitions.join('\n');
+                    return 'stateDiagram-v2' + NL + transitions.join(NL);
                 }
             }
             
@@ -3540,7 +3631,7 @@ and click 'Formalize' to let AI interpret it."></textarea>
                     return '';
                 }).filter(l => l);
                 if (edges.length > 0) {
-                    return 'graph LR\n' + edges.join('\n');
+                    return 'graph LR' + NL + edges.join(NL);
                 }
             }
             
@@ -3568,6 +3659,38 @@ and click 'Formalize' to let AI interpret it."></textarea>
             document.getElementById('preview').innerHTML = '<div class="empty-state">Live preview appears here...</div>';
         }
         
+        async function aiPreview() {
+            const sketch = document.getElementById('whiteboard').value.trim();
+            if (!sketch) return;
+            
+            const preview = document.getElementById('preview');
+            preview.innerHTML = '<div class="empty-state">AI thinking...</div>';
+            
+            const provider = document.getElementById('provider').value;
+            
+            try {
+                const resp = await fetch('/diagram', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ sketch, provider })
+                });
+                
+                if (!resp.ok) throw new Error(await resp.text());
+                
+                const data = await resp.json();
+                if (data.mermaid) {
+                    preview.innerHTML = '<div class="mermaid" id="ai-preview-mermaid">' + data.mermaid + '</div>';
+                    setTimeout(() => {
+                        try { mermaid.run(); } catch(e) { console.log('Mermaid error:', e); }
+                    }, 50);
+                } else if (data.error) {
+                    preview.innerHTML = '<div class="error" style="color:#f85149;padding:1rem;">' + data.error + '</div>';
+                }
+            } catch (err) {
+                preview.innerHTML = '<div class="error" style="color:#f85149;padding:1rem;">Error: ' + err.message + '</div>';
+            }
+        }
+        
         function formalizeWhiteboard() {
             const sketch = document.getElementById('whiteboard').value.trim();
             if (!sketch) return;
@@ -3584,16 +3707,51 @@ and click 'Formalize' to let AI interpret it."></textarea>
                 sketchType = 'actor descriptions';
             }
             
-            const prompt = 'I sketched this on the whiteboard (looks like ' + sketchType + '):\n\n' +
-                sketch + '\n\n' +
-                'Please:\n' +
-                '1. Interpret what I am trying to express\n' +
-                '2. Create proper mermaid diagrams for it (sequence diagrams for message flows, state diagrams for state machines)\n' +
-                '3. Define actors and their behaviors in BoundedLISP\n' +
-                '4. Suggest relevant CTL properties to verify';
+            let prompt = '';
+            
+            // If we have a previous spec, ask for incremental update
+            if (currentMarkdown && currentDoc) {
+                prompt = 'I updated my whiteboard sketch (looks like ' + sketchType + '):\n\n' +
+                    sketch + '\n\n' +
+                    'Here is the current specification you generated:\n\n' +
+                    '--- CURRENT LISP ---\n' + currentDoc + '\n--- END LISP ---\n\n' +
+                    'Please update the specification to reflect my changes. Keep what still applies, modify what needs changing.';
+            } else {
+                // First time - full generation
+                prompt = 'I sketched this on the whiteboard (looks like ' + sketchType + '):\n\n' +
+                    sketch + '\n\n' +
+                    'Please:\n' +
+                    '1. Interpret what I am trying to express\n' +
+                    '2. Create proper mermaid diagrams for it (sequence diagrams for message flows, state diagrams for state machines)\n' +
+                    '3. Define actors and their behaviors in BoundedLISP\n' +
+                    '4. Suggest relevant CTL properties to verify';
+            }
             
             document.getElementById('input').value = prompt;
             sendMessage();
+        }
+        
+        function updateFormalizeButton() {
+            const btn = document.getElementById('formalizeBtn');
+            const newBtn = document.getElementById('newSpecBtn');
+            if (currentDoc) {
+                btn.textContent = 'Update →';
+                btn.title = 'Update existing specification with whiteboard changes';
+                newBtn.style.display = 'inline-block';
+            } else {
+                btn.textContent = 'Formalize →';
+                btn.title = 'Generate specification from whiteboard sketch';
+                newBtn.style.display = 'none';
+            }
+        }
+        
+        function newSpec() {
+            // Clear current spec and start fresh
+            currentDoc = '';
+            currentMarkdown = '';
+            updateSpecPanel();
+            updateFormalizeButton();
+            document.getElementById('whiteboard').focus();
         }
         
         async function sendMessage() {
@@ -3637,6 +3795,7 @@ and click 'Formalize' to let AI interpret it."></textarea>
                 if (data.current_doc) {
                     currentDoc = data.current_doc;
                     if (currentTab === 'code') updateSpecPanel();
+                    updateFormalizeButton();
                 }
             } catch (err) {
                 document.getElementById('loading')?.remove();
