@@ -3225,16 +3225,17 @@ func handleDiagram(ev *Evaluator) http.HandlerFunc {
 				return
 			}
 			
-			// Ask LLM to interpret sketch and generate mermaid
-			prompt := `Interpret this whiteboard sketch and generate a Mermaid diagram.
-The sketch may contain:
-- Message flows like "A -> B: message" 
-- State transitions like "Idle --> Waiting"
-- Natural language commands like "color X red" or "make it horizontal"
+			// Ask LLM to interpret sketch and generate mermaid diagrams
+			prompt := `Interpret this whiteboard sketch and generate Mermaid diagrams.
 
-Apply any commands/instructions you find to the diagram.
+The sketch may contain multiple sections:
+- Message flows like "A -> B: message" → generate sequenceDiagram
+- State transitions like "Idle --> Waiting" → generate stateDiagram-v2  
+- Natural language notes/commands → apply them to nearby diagrams (e.g. "color X red", "make vertical")
 
-Respond with ONLY the mermaid diagram code, no explanation, no markdown fences.
+Generate ALL relevant diagrams. Separate multiple diagrams with ===DIAGRAM=== on its own line.
+
+Respond with ONLY mermaid code, no explanations, no markdown fences.
 
 Sketch:
 ` + req.Sketch
@@ -3254,15 +3255,26 @@ Sketch:
 				return
 			}
 			
-			// Clean up response - remove any markdown fences
+			// Clean up response and split into diagrams
 			response = strings.TrimSpace(response)
-			response = strings.TrimPrefix(response, "```mermaid")
-			response = strings.TrimPrefix(response, "```")
-			response = strings.TrimSuffix(response, "```")
-			response = strings.TrimSpace(response)
+			response = strings.ReplaceAll(response, "```mermaid", "")
+			response = strings.ReplaceAll(response, "```", "")
+			
+			// Split by delimiter
+			parts := strings.Split(response, "===DIAGRAM===")
+			var diagrams []string
+			for _, p := range parts {
+				p = strings.TrimSpace(p)
+				if p != "" {
+					diagrams = append(diagrams, p)
+				}
+			}
 			
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(map[string]string{"mermaid": response})
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"diagrams": diagrams,
+				"mermaid":  strings.Join(diagrams, "\n"),  // backward compat
+			})
 			return
 		}
 		
@@ -3463,19 +3475,19 @@ const indexHTML = `<!DOCTYPE html>
         </div>
         <div class="whiteboard-area">
             <div class="whiteboard-input">
-                <textarea id="whiteboard" placeholder="Sketch + commands...
+                <textarea id="whiteboard" placeholder="Sketch multiple diagrams...
 
-DIAGRAM NOTATION:
+MESSAGES (sequence diagram):
   A -> B: hello
-  C -> B: let us pass
+  B -> A: hi there
 
-COMMANDS (AI interprets these):
-  color A red, B white, C blue
-  make it vertical
-  add a note: negotiation phase
+some notes or commands here...
 
-Click '✨ AI' to have AI interpret and render.
-Click 'Formalize' for full LISP spec."></textarea>
+STATES (state diagram):
+  Idle --> Waiting
+  Waiting --> Done
+
+Click '✨ AI' for smart interpretation."></textarea>
             </div>
             <div class="whiteboard-preview" id="preview">
                 <div class="empty-state">Live preview appears here...</div>
@@ -3532,114 +3544,136 @@ Click 'Formalize' for full LISP spec."></textarea>
                 return;
             }
             
+            // Parse into sections
+            const sections = parseWhiteboardSections(text);
             let html = '';
+            let diagramCount = 0;
             
-            // Try to render as mermaid if it looks like a diagram
-            const hasMsgPattern = /\w+\s*->\s*\w+\s*:/.test(text);
-            const hasStatePattern = text.includes('-->');
-            const hasMermaidKeyword = text.includes('graph') || text.includes('sequenceDiagram') || text.includes('stateDiagram');
-            
-            if (hasMsgPattern || hasStatePattern || hasMermaidKeyword) {
-                const mermaidCode = extractMermaid(text);
-                if (mermaidCode) {
-                    html += '<div class="mermaid" id="preview-mermaid">' + mermaidCode + '</div>';
+            sections.forEach((section, idx) => {
+                if (section.type === 'sequence') {
+                    diagramCount++;
+                    const code = 'sequenceDiagram' + NL + section.lines.map(l => {
+                        const m = l.match(/^(\w+)\s*->\s*(\w+)\s*:\s*(.+?)\.?$/);
+                        if (m) {
+                            let msg = m[3].replace(/\.+$/, '').trim().replace(/[^a-zA-Z0-9 ,.!?'-]/g, '');
+                            return '    ' + m[1] + '->>' + m[2] + ': ' + msg;
+                        }
+                        return '';
+                    }).filter(l => l).join(NL);
+                    html += '<div class="mermaid" id="diagram-' + idx + '">' + code + '</div>';
+                } else if (section.type === 'state') {
+                    diagramCount++;
+                    const code = 'stateDiagram-v2' + NL + section.lines.map(l => {
+                        const withAction = l.match(/(\w+)\s*--\(([^)]+)\)-->\s*(\w+)/);
+                        if (withAction) return '    ' + withAction[1] + ' --> ' + withAction[3] + ' : ' + withAction[2];
+                        const simple = l.match(/(\w+)\s*-->\s*(\w+)/);
+                        if (simple) return '    ' + simple[1] + ' --> ' + simple[2];
+                        return '';
+                    }).filter(l => l).join(NL);
+                    html += '<div class="mermaid" id="diagram-' + idx + '">' + code + '</div>';
+                } else if (section.type === 'flow') {
+                    diagramCount++;
+                    const code = 'graph LR' + NL + section.lines.map(l => {
+                        const m = l.match(/^(\w+)\s*->\s*(\w+)$/);
+                        if (m) return '    ' + m[1] + ' --> ' + m[2];
+                        return '';
+                    }).filter(l => l).join(NL);
+                    html += '<div class="mermaid" id="diagram-' + idx + '">' + code + '</div>';
+                } else if (section.type === 'latex') {
+                    html += '<div class="latex-section">' + renderLatex(section.lines.join(NL)) + '</div>';
+                } else if (section.type === 'text') {
+                    // Unknown text - show as note (could be commands for AI)
+                    const content = section.lines.join(NL).trim();
+                    if (content) {
+                        html += '<div class="note-section" style="color:#8b949e;font-size:0.8rem;padding:0.5rem;border-left:2px solid #30363d;margin:0.5rem 0;">' + 
+                            '<em>📝 ' + escapeHtml(content) + '</em></div>';
+                    }
                 }
-            }
+            });
             
-            // Render LaTeX
-            const latexRendered = renderLatex(text);
-            if (latexRendered !== text) {
-                html += '<div class="latex-content">' + latexRendered + '</div>';
-            }
-            
-            // If nothing special, just show as preformatted
             if (!html) {
                 html = '<pre style="color:#c9d1d9;font-size:0.85rem;white-space:pre-wrap;">' + escapeHtml(text) + '</pre>';
             }
             
             preview.innerHTML = html;
             
-            // Run mermaid with error handling
-            if (html.includes('class="mermaid"')) {
+            // Run mermaid
+            if (diagramCount > 0) {
                 setTimeout(async () => {
                     try { 
                         await mermaid.run(); 
                     } catch(e) { 
                         console.log('Mermaid error:', e);
-                        // Show the raw mermaid code on error
-                        const mermaidDiv = document.getElementById('preview-mermaid');
-                        if (mermaidDiv && e.message) {
-                            mermaidDiv.innerHTML = '<pre style="color:#f85149;font-size:0.75rem;">Mermaid error: ' + e.message + '</pre>' +
-                                '<pre style="color:#8b949e;font-size:0.75rem;">' + escapeHtml(mermaidDiv.textContent) + '</pre>';
-                        }
                     }
                 }, 50);
             }
         }
         
-        function extractMermaid(text) {
-            // Auto-detect and wrap in mermaid syntax
-            const lines = text.split('\n').map(l => l.trim());
+        function parseWhiteboardSections(text) {
+            const lines = text.split(NL);
+            const sections = [];
+            let currentSection = null;
             
-            // Check for message patterns: A -> B: message or A->B: message
-            const msgPattern = /^(\w+)\s*->\s*(\w+)\s*:\s*(.+?)\.?$/;
-            const msgLines = lines.filter(l => msgPattern.test(l));
-            if (msgLines.length > 0) {
-                const seqLines = msgLines.map(l => {
-                    const m = l.match(msgPattern);
-                    if (m) {
-                        // Clean message for mermaid - keep alphanumeric, spaces, basic punct
-                        let msg = m[3].replace(/\.+$/, '').trim();
-                        msg = msg.replace(/[^a-zA-Z0-9 ,.!?'-]/g, '');
-                        return '    ' + m[1] + '->>' + m[2] + ': ' + msg;
-                    }
-                    return '';
-                }).filter(l => l);
-                if (seqLines.length > 0) {
-                    return 'sequenceDiagram' + NL + seqLines.join(NL);
-                }
-            }
-            
-            // Check for state transition patterns: State1 --> State2 or State1 --(action)--> State2
-            const statePattern = /^(\w+)\s*--.*?-->\s*(\w+)|^(\w+)\s*-->\s*(\w+)/;
-            const stateLines = lines.filter(l => statePattern.test(l));
-            if (stateLines.length > 0) {
-                const transitions = stateLines.map(l => {
-                    // Try to extract action from --(action)-->
-                    const withAction = l.match(/(\w+)\s*--\(([^)]+)\)-->\s*(\w+)/);
-                    if (withAction) {
-                        return '    ' + withAction[1] + ' --> ' + withAction[3] + ' : ' + withAction[2];
-                    }
-                    const simple = l.match(/(\w+)\s*-->\s*(\w+)/);
-                    if (simple) {
-                        return '    ' + simple[1] + ' --> ' + simple[2];
-                    }
-                    return '';
-                }).filter(l => l);
-                if (transitions.length > 0) {
-                    return 'stateDiagram-v2' + NL + transitions.join(NL);
-                }
-            }
-            
-            // Check for flow patterns: A -> B (no colon, so flowchart)
+            const msgPattern = /^(\w+)\s*->\s*(\w+)\s*:\s*.+$/;
+            const statePattern = /^(\w+)\s*--.*-->\s*(\w+)|^(\w+)\s*-->\s*(\w+)/;
             const flowPattern = /^(\w+)\s*->\s*(\w+)$/;
-            const flowLines = lines.filter(l => flowPattern.test(l));
-            if (flowLines.length > 0) {
-                const edges = flowLines.map(l => {
-                    const m = l.match(flowPattern);
-                    if (m) return '    ' + m[1] + ' --> ' + m[2];
-                    return '';
-                }).filter(l => l);
-                if (edges.length > 0) {
-                    return 'graph LR' + NL + edges.join(NL);
+            const latexPattern = /\$[^$]+\$/;
+            
+            function getLineType(line) {
+                const trimmed = line.trim();
+                if (!trimmed) return 'empty';
+                if (msgPattern.test(trimmed)) return 'sequence';
+                if (statePattern.test(trimmed)) return 'state';
+                if (flowPattern.test(trimmed)) return 'flow';
+                if (latexPattern.test(trimmed)) return 'latex';
+                return 'text';
+            }
+            
+            function pushSection() {
+                if (currentSection && currentSection.lines.length > 0) {
+                    sections.push(currentSection);
                 }
             }
             
-            // Already valid mermaid
-            if (text.includes('sequenceDiagram') || text.includes('stateDiagram') || text.includes('graph') || text.includes('flowchart')) {
-                return text;
-            }
+            lines.forEach(line => {
+                const type = getLineType(line);
+                
+                if (type === 'empty') {
+                    // Empty lines can end a section
+                    if (currentSection && currentSection.type !== 'text') {
+                        pushSection();
+                        currentSection = null;
+                    }
+                    return;
+                }
+                
+                if (!currentSection || currentSection.type !== type) {
+                    pushSection();
+                    currentSection = { type: type, lines: [] };
+                }
+                
+                currentSection.lines.push(line.trim());
+            });
             
+            pushSection();
+            return sections;
+        }
+        
+        function extractMermaid(text) {
+            // Legacy single-diagram extraction (kept for compatibility)
+            const sections = parseWhiteboardSections(text);
+            const diagrams = sections.filter(s => ['sequence', 'state', 'flow'].includes(s.type));
+            if (diagrams.length === 0) return null;
+            
+            // Return first diagram only
+            const first = diagrams[0];
+            if (first.type === 'sequence') {
+                return 'sequenceDiagram' + NL + first.lines.map(l => {
+                    const m = l.match(/^(\w+)\s*->\s*(\w+)\s*:\s*(.+?)\.?$/);
+                    if (m) return '    ' + m[1] + '->>' + m[2] + ': ' + m[3].replace(/\.+$/, '');
+                    return '';
+                }).filter(l => l).join(NL);
+            }
             return null;
         }
         
@@ -3664,7 +3698,7 @@ Click 'Formalize' for full LISP spec."></textarea>
             if (!sketch) return;
             
             const preview = document.getElementById('preview');
-            preview.innerHTML = '<div class="empty-state">AI thinking...</div>';
+            preview.innerHTML = '<div class="empty-state">✨ AI interpreting...</div>';
             
             const provider = document.getElementById('provider').value;
             
@@ -3678,13 +3712,26 @@ Click 'Formalize' for full LISP spec."></textarea>
                 if (!resp.ok) throw new Error(await resp.text());
                 
                 const data = await resp.json();
-                if (data.mermaid) {
+                
+                if (data.diagrams && data.diagrams.length > 0) {
+                    let html = '';
+                    data.diagrams.forEach((diagram, idx) => {
+                        html += '<div class="mermaid" id="ai-diagram-' + idx + '">' + diagram + '</div>';
+                    });
+                    preview.innerHTML = html;
+                    setTimeout(() => {
+                        try { mermaid.run(); } catch(e) { console.log('Mermaid error:', e); }
+                    }, 50);
+                } else if (data.mermaid) {
+                    // Backward compatibility
                     preview.innerHTML = '<div class="mermaid" id="ai-preview-mermaid">' + data.mermaid + '</div>';
                     setTimeout(() => {
                         try { mermaid.run(); } catch(e) { console.log('Mermaid error:', e); }
                     }, 50);
                 } else if (data.error) {
                     preview.innerHTML = '<div class="error" style="color:#f85149;padding:1rem;">' + data.error + '</div>';
+                } else {
+                    preview.innerHTML = '<div class="empty-state">No diagrams generated</div>';
                 }
             } catch (err) {
                 preview.innerHTML = '<div class="error" style="color:#f85149;padding:1rem;">Error: ' + err.message + '</div>';
