@@ -3564,10 +3564,19 @@ Click '✨ AI' for smart interpretation."></textarea>
                 } else if (section.type === 'state') {
                     diagramCount++;
                     const code = 'stateDiagram-v2' + NL + section.lines.map(l => {
-                        const withAction = l.match(/(\w+)\s*--\(([^)]+)\)-->\s*(\w+)/);
-                        if (withAction) return '    ' + withAction[1] + ' --> ' + withAction[3] + ' : ' + withAction[2];
-                        const simple = l.match(/(\w+)\s*-->\s*(\w+)/);
-                        if (simple) return '    ' + simple[1] + ' --> ' + simple[2];
+                        var withAction = l.match(/\s*(\w+)\s*-->\s*(\w+)\s*:\s*(\w+)\s*/)
+                        if( !withAction ) {
+                            withAction = l.match(/\s*(\w+)\s*-->\s*(\w+)\s*/)
+                        }
+                        if(withAction) {
+                            if (withAction.length === 4) {
+                                return '    ' + withAction[1] + ' --> ' + withAction[2] + ' : ' + withAction[3];
+                            } else {
+                                return '    ' + withAction[1] + ' --> ' + withAction[2];
+                            }
+                        } else {
+                            console.log("could not parse: " + l);
+                        }
                         return '';
                     }).filter(l => l).join(NL);
                     html += '<div class="mermaid" id="diagram-' + idx + '">' + code + '</div>';
